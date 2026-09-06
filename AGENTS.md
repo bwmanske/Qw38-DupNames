@@ -47,4 +47,6 @@ ctest  --test-dir build -C Release                 # run all tests
 ## Status
 
 - P0 scaffold done: configures, builds clean, smoke test passes, GUI launches.
-- Pending: P1 matching core → P2 scanner → P3 GUI queue (M1) → P4 lists/INI → P5 options → P6 deletion → P7 hardening.
+- P1 matching core done: normalization, folding, scoring, clustering; 37 test cases green.
+- P2 scanner done: `dn::scan()` (recursive/flat, include/exclude globs, hidden skip, progress callback) in `src/scanner.cpp`; 52 test cases green.
+- Pending: P3 GUI queue (M1) → P4 lists/INI → P5 options → P6 deletion → P7 hardening.

@@ -30,6 +30,7 @@ add_library(dn_core
   src/compare.cpp
   src/cluster.cpp
   src/blocking.cpp
+  src/scanner.cpp
 )
 target_include_directories(dn_core PUBLIC include)
 
@@ -62,6 +63,7 @@ if(DN_TESTS)
     tests/test_cluster.cpp
     tests/test_blocking.cpp
     tests/test_acceptance.cpp
+    tests/test_scanner.cpp
   )
   target_link_libraries(dn_tests PRIVATE dn_core doctest)
   if(MSVC)
