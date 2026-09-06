@@ -141,6 +141,72 @@ table complete with no open items.
 
 ---
 
+## Phase 8 — GUI Command Line + INI Persistence
+
+**Goal:** the Win32 GUI app accepts command-line parameters and persists
+settings and path lists in an INI file. This revives a subset of the original
+CLI requirements (IMPLEMENTATION.md §11, obsolete as a whole) inside the GUI
+app. Requirements as documented in `docs/USER_GUIDE.md`
+(§"Command line", §"Configuration and user data").
+
+**Command line (planned syntax):**
+
+```
+DupNames.exe [--ini FILE] [--match VALUE] [--close VALUE]
+```
+
+**INI file** — default `%AppData%\Roaming\DupNames\DupNames.ini`, overridable
+via `--ini FILE`:
+
+```ini
+[InitState]
+MatchThreshold = 0.85
+CloseThreshold = 0.60
+
+[PathList]
+ProtectedPath1 = D:\Media\Movies
+ProtectedPath2 = \\fileserver\archive\protected
+CommonPath1 = E:\Downloads
+CommonPath2 = \\fileserver\share\inbox
+```
+
+Semantics:
+
+- `[InitState]` holds startup options; `MatchThreshold` / `CloseThreshold`
+  are the first two (map to `Config::match_threshold` /
+  `Config::close_threshold`). More startup options may be added later.
+- `[PathList]` holds `ProtectedPath1..N` (never delete from) and
+  `CommonPath1..N` (duplicates may be deleted). Both may be local
+  (`D:\...`) or network/UNC (`\\server\share\...`) paths.
+- Precedence: **command line > INI file > built-in default**.
+- **Write-back:** `--match` / `--close` values given on the command line are
+  saved into the INI file in use — the `--ini FILE` if one was given, else
+  the default INI. The file and its sections are created if missing.
+
+| # | Task | Files |
+|---|---|---|
+| 8.1 | Wide-char CLI parsing in `wWinMain` via `GetCommandLineW`: `--ini FILE`, `--match VALUE`, `--close VALUE`; invalid/unknown args → message box with usage | `src/main.cpp` |
+| 8.2 | INI read/write: sections `[InitState]`, `[PathList]`; keys `MatchThreshold`, `CloseThreshold`, `ProtectedPathN`, `CommonPathN`; create file/sections if missing; tolerate non-contiguous numbering (e.g. `ProtectedPath1`, `ProtectedPath3`) | `src/ini.cpp`, `include/dn/ini.hpp` |
+| 8.3 | Default INI path resolution: `%AppData%\Roaming\DupNames\DupNames.ini` (create the directory if missing) | `src/ini.cpp` |
+| 8.4 | Load `[InitState]` into `Config`; apply precedence CLI > INI > default | `src/ini.cpp` |
+| 8.5 | Write-back of CLI `--match` / `--close` to the INI in use (`--ini` file if given, else default INI) | `src/ini.cpp`, `src/main.cpp` |
+| 8.6 | Load `[PathList]` into `DirList` / `DirEntry` vectors; accept local and UNC paths; `ProtectedPathN` → `protected_ = true`, `CommonPathN` → `protected_ = false` | `src/ini.cpp` |
+| 8.7 | Unit tests: INI parse/write round-trip; missing file/section/key → defaults; CLI precedence; write-back to default and to `--ini` file; UNC path keys; non-contiguous numbering | `tests/test_ini.cpp` (add to the `dn_tests` target in `CMakeLists.txt`) |
+
+**Exit criteria:** `DupNames.exe --match 0.9 --close 0.7` creates/updates the
+default INI with those values; `DupNames.exe --ini custom.ini --match 0.9`
+updates `custom.ini` (and leaves the default INI untouched); an INI with
+mixed local/UNC `ProtectedPathN` / `CommonPathN` entries loads into the path
+list with correct protection flags; all `test_ini` cases pass.
+
+Notes:
+
+- INI handling is Windows-specific, but the project is Windows-only; it lives
+  in `dn_core` so the app and the tests share it.
+- This phase corresponds to P4 (lists/INI) and P5 (options) in `AGENTS.md`.
+
+---
+
 ## Dependency Graph
 
 ```

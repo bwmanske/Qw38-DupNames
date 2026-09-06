@@ -42,7 +42,7 @@ ctest  --test-dir build -C Release                 # run all tests
 
 ## User data
 
-- `%AppData%\Roaming\DupNames\` — an INI file with `[InitState]` (search-repro options, added later) and `[PathList]` sections. PathList keys encode protection: `ProtectedPathN=<path>` (never delete) and `CommonPathN=<path>` (deletable).
+- `%AppData%\Roaming\DupNames\DupNames.ini` (default; overridable with `--ini FILE` on the command line). Sections: `[InitState]` (startup options; first two: `MatchThreshold`, `CloseThreshold`) and `[PathList]` (`ProtectedPathN=<path>` never delete, `CommonPathN=<path>` deletable; local and UNC paths). CLI `--match`/`--close` override the INI and are written back to it (the `--ini` file if given, else the default INI). See `docs/USER_GUIDE.md` and PLAN.md Phase 8.
 
 ## Status
 
