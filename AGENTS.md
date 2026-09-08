@@ -42,7 +42,7 @@ ctest  --test-dir build -C Release                 # run all tests
 
 ## User data
 
-- `%AppData%\Roaming\DupNames\DupNames.ini` (default; overridable with `--ini FILE` on the command line). Sections: `[InitState]` (startup options; first two: `MatchThreshold`, `CloseThreshold`) and `[PathList]` (`ProtectedPathN=<path>` never delete, `CommonPathN=<path>` deletable; local and UNC paths). CLI `--match`/`--close` override the INI and are written back to it (the `--ini` file if given, else the default INI). See `docs/USER_GUIDE.md` and PLAN.md Phase 8.
+- `%APPDATA%\DupNames\DupNames.ini` (i.e. `C:\Users\<user>\AppData\Roaming\DupNames\DupNames.ini`; default, overridable with `--ini FILE`). Sections: `[InitState]` (startup options; first two: `MatchThreshold`, `CloseThreshold`) and `[PathList]` (`ProtectedPathN=<path>` never delete, `CommonPathN=<path>` deletable; local and UNC paths). CLI `--match`/`--close` override the INI and are written back to it (the `--ini` file if given, else the default INI). The path list is loaded on startup and saved on exit. See `docs/USER_GUIDE.md` and PLAN.md Phase 8.
 
 ## Status
 
@@ -50,4 +50,5 @@ ctest  --test-dir build -C Release                 # run all tests
 - P1 matching core done: normalization, folding, scoring, clustering; 37 test cases green.
 - P2 scanner done: `dn::scan()` (recursive/flat, include/exclude globs, hidden skip, progress callback) in `src/scanner.cpp`; 52 test cases green.
 - P3 GUI queue (M1) done: `src/gui/app.cpp` — in-memory dir list (add/remove via folder dialog), Scan button, tree-view queue of MATCH clusters; `dn::match()` pipeline (normalize→block→score→cluster) in `src/match.cpp`; 57 test cases green.
-- Pending: P4 lists/INI → P5 options → P6 deletion → P7 hardening.
+- P4 lists/INI done: `dn::ini` (Win32 INI I/O, default path, load/save `[InitState]`+`[PathList]`, `resolve_config` precedence) in `src/ini.cpp`; `dn::parse_cli` (`--ini`/`--match`/`--close`) in `src/cli.cpp`; GUI loads the path list on start, saves on exit, applies thresholds; 79 test cases green.
+- Pending: P5 options → P6 deletion → P7 hardening.

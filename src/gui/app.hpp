@@ -2,18 +2,20 @@
 
 #include <windows.h>
 
+#include <string>
 #include <vector>
 
+#include "dn/cli.hpp"
 #include "dn/types.hpp"
 
 namespace gui {
 
-// The DupNames main window (M1 vertical slice): an in-memory directory list,
-// a Scan action, and a queue (tree view) of MATCH clusters. No persistence yet
-// (path-list / INI is P4).
+// The DupNames main window: a directory list (loaded from and saved to the INI
+// path list), a Scan action, and a queue (tree view) of MATCH clusters.
+// Thresholds come from the INI [InitState] with command-line overrides.
 class App {
 public:
-    explicit App(HINSTANCE hInstance);
+    App(HINSTANCE hInstance, const dn::CliArgs& cli);
 
     // Register classes, create + show the window, and run the message loop.
     // Returns the process exit code.
@@ -24,6 +26,8 @@ private:
     LRESULT WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
     void CreateControls();
+    void LoadState();   // resolve config (INI + CLI) and load the path list
+    void SaveState();   // persist the current path list to the INI
     void Layout(int w, int h);
     void OnAddFolder();
     void OnRemoveFolder();
@@ -41,7 +45,10 @@ private:
     HWND scanBtn_ = nullptr;
     HWND status_ = nullptr;
 
-    std::vector<dn::DirEntry> dirs_;    // in-memory path list (no persistence yet)
+    dn::CliArgs cli_;                  // parsed command-line options
+    std::wstring ini_path_;            // INI in use (--ini FILE or the default)
+    dn::Config config_;                // effective config (default <- INI <- CLI)
+    std::vector<dn::DirEntry> dirs_;   // path list (loaded from / saved to INI)
     std::vector<dn::FileEntry> entries_;  // last scan results
 };
 

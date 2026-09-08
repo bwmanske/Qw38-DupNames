@@ -32,6 +32,8 @@ add_library(dn_core
   src/blocking.cpp
   src/scanner.cpp
   src/match.cpp
+  src/ini.cpp
+  src/cli.cpp
 )
 target_include_directories(dn_core PUBLIC include)
 
@@ -67,6 +69,8 @@ if(DN_TESTS)
     tests/test_acceptance.cpp
     tests/test_scanner.cpp
     tests/test_match.cpp
+    tests/test_ini.cpp
+    tests/test_cli.cpp
   )
   target_link_libraries(dn_tests PRIVATE dn_core doctest)
   if(MSVC)

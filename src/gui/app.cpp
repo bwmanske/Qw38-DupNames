@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include "dn/ini.hpp"
 #include "dn/match.hpp"
 #include "dn/scanner.hpp"
 
@@ -57,7 +58,9 @@ HTREEITEM insert_tree_item(HWND tree, HTREEITEM parent, const std::wstring& text
 
 }  // namespace
 
-App::App(HINSTANCE hInstance) : hInstance_(hInstance) {}
+App::App(HINSTANCE hInstance, const dn::CliArgs& cli)
+    : hInstance_(hInstance), cli_(cli),
+      ini_path_(cli.ini_path.empty() ? dn::default_ini_path() : cli.ini_path) {}
 
 int App::Run(int nCmdShow) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -92,6 +95,7 @@ int App::Run(int nCmdShow) {
     RECT rc{};
     GetClientRect(hwnd_, &rc);
     Layout(rc.right - rc.left, rc.bottom - rc.top);
+    LoadState();
 
     ShowWindow(hwnd_, nCmdShow);
     UpdateWindow(hwnd_);
@@ -134,6 +138,7 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             Layout(LOWORD(lp), HIWORD(lp));
             return 0;
         case WM_DESTROY:
+            SaveState();
             PostQuitMessage(0);
             return 0;
         default:
@@ -176,8 +181,22 @@ void App::CreateControls() {
                              hInstance_, nullptr);
 
     status_ = CreateWindowExW(0, L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                              8, 600, 400, 18, hwnd_, reinterpret_cast<HMENU>(kIdStatus),
-                              hInstance_, nullptr);
+                               8, 600, 400, 18, hwnd_, reinterpret_cast<HMENU>(kIdStatus),
+                               hInstance_, nullptr);
+}
+
+void App::LoadState() {
+    // Resolve thresholds (default <- INI <- CLI) and write back any CLI values.
+    config_ = dn::resolve_config(ini_path_, cli_);
+    // Load the persisted path list (protected + common) into the directory list.
+    dirs_ = dn::ini_load_paths(ini_path_);
+    RefreshDirList();
+    SetStatus(L"Loaded " + std::to_wstring(dirs_.size()) + L" director(y/ies) from " +
+              ini_path_);
+}
+
+void App::SaveState() {
+    dn::ini_save_paths(ini_path_, dirs_);
 }
 
 void App::Layout(int w, int h) {
@@ -257,9 +276,8 @@ void App::OnScan() {
     SetStatus(L"Scanning...");
     UpdateWindow(hwnd_);
 
-    dn::Config cfg;  // defaults; the options dialog is P5
-    entries_ = dn::scan(dirs_, cfg, {});
-    const auto clusters = dn::match(entries_, cfg);
+    entries_ = dn::scan(dirs_, config_, {});
+    const auto clusters = dn::match(entries_, config_);
     PopulateQueue(clusters);
 
     SetStatus(L"Scanned " + std::to_wstring(entries_.size()) + L" file(s); " +

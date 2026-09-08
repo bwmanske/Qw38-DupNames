@@ -41,8 +41,9 @@ The main window (titled **DupNames**, 900 x 640) has three parts:
 
 - **Directories** (top): a list of the folders to scan. Use **Add...** to pick
   a folder (a folder browser opens) and **Remove** to drop the selected one.
-  This list is in-memory only — it is not saved yet (that arrives with the
-  INI/path-list work).
+  The list is loaded from the INI `[PathList]` on startup and saved back on
+  exit (see [Configuration and user data](#configuration-and-user-data)).
+  Folders added with **Add...** are saved as common (deletable) paths.
 - **Scan** (top-right): scans the listed directories, finds similar file
   names, and fills the queue below. The status line reports how many files
   were scanned and how many match groups were found.
@@ -55,16 +56,13 @@ There are no menus or settings dialog yet (see
 
 ## Command line
 
-Command-line options are **planned** (not yet implemented — see
-[What's implemented](#whats-implemented)). Planned syntax:
-
 ```
 DupNames.exe [--ini FILE] [--match VALUE] [--close VALUE]
 ```
 
 | Option | Meaning |
 |---|---|
-| `--ini FILE` | Initialization INI file to load (see [Configuration and user data](#configuration-and-user-data)). If omitted, the default INI is used: `%AppData%\Roaming\DupNames\DupNames.ini`. |
+| `--ini FILE` | Initialization INI file to load (see [Configuration and user data](#configuration-and-user-data)). If omitted, the default INI is used: `%APPDATA%\DupNames\DupNames.ini`. |
 | `--match VALUE` | Match threshold, a number between 0 and 1 (default `0.85`). Pairs scoring at or above this are classified MATCH. |
 | `--close VALUE` | Close threshold, a number between 0 and 1 (default `0.60`). Pairs scoring at or above this, but below the match threshold, are classified CLOSE. |
 
@@ -86,14 +84,15 @@ that design and `AGENTS.md` for the note on the pivot to the GUI.)
 
 ## Configuration and user data
 
-**Planned** (not yet implemented). All persistent settings live in one INI
-file. Default location:
+All persistent settings live in one INI file. Default location:
 
 ```
-%AppData%\Roaming\DupNames\DupNames.ini
+%APPDATA%\DupNames\DupNames.ini
 ```
 
-A different file can be selected with `--ini FILE` on the command line.
+(i.e. `C:\Users\<user>\AppData\Roaming\DupNames\DupNames.ini`). A different
+file can be selected with `--ini FILE` on the command line. The file and its
+sections are created on first save if they do not already exist.
 
 ### `[InitState]` — startup options
 
@@ -139,11 +138,12 @@ CommonPath2 = \\fileserver\share\inbox
 |---|---|
 | Project build (CMake, MSVC) | Done |
 | Name matching core (normalization, Unicode folding, year extraction, junk-token removal, fuzzy scoring, clustering) | Done, in the `dn_core` library, wired into the GUI |
-| Test suite (57 test cases, including all 19 spec acceptance cases) | Done, all passing |
+| Test suite (79 test cases, including all 19 spec acceptance cases) | Done, all passing |
 | Directory scanning | Done (recursive/flat, include/exclude globs, hidden skip) |
 | GUI main window | Done — directory list, Scan button, match queue |
 | Match queue in the GUI | Done — tree of MATCH groups, expandable to member files |
-| Path lists / INI persistence | Not started (directory list is in-memory only for now) |
+| Command line (`--ini` / `--match` / `--close`) | Done, with INI write-back |
+| Path lists / INI persistence | Done — loaded on start, saved on exit; local + UNC paths |
 | Options dialog | Not started |
 | Duplicate deletion | Not started |
 
