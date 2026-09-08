@@ -37,9 +37,21 @@ Artifacts in `build\Release\`:
 
 Run `build\Release\DupNames.exe` (double-click or from a terminal).
 
-The app opens its main window, titled **DupNames** (900 x 640). That is all
-it does today — the window is an empty placeholder. There are no menus,
-buttons, or settings yet.
+The main window (titled **DupNames**, 900 x 640) has three parts:
+
+- **Directories** (top): a list of the folders to scan. Use **Add...** to pick
+  a folder (a folder browser opens) and **Remove** to drop the selected one.
+  This list is in-memory only — it is not saved yet (that arrives with the
+  INI/path-list work).
+- **Scan** (top-right): scans the listed directories, finds similar file
+  names, and fills the queue below. The status line reports how many files
+  were scanned and how many match groups were found.
+- **Matches** (bottom): a tree of match groups. Each top-level node is a group
+  (the representative name plus a count); expand it to see every file in the
+  group with its directory.
+
+There are no menus or settings dialog yet (see
+[What's implemented](#whats-implemented)).
 
 ## Command line
 
@@ -126,12 +138,12 @@ CommonPath2 = \\fileserver\share\inbox
 | Area | State |
 |---|---|
 | Project build (CMake, MSVC) | Done |
-| Name matching core (normalization, Unicode folding, year extraction, junk-token removal, fuzzy scoring, clustering) | Done, in the `dn_core` library — **not yet visible in the GUI** |
-| Test suite (37 test cases, including all 19 spec acceptance cases) | Done, all passing |
-| GUI main window | Empty placeholder |
-| Directory scanning | Not started |
-| Match queue in the GUI | Not started |
-| Path lists / INI persistence | Not started |
+| Name matching core (normalization, Unicode folding, year extraction, junk-token removal, fuzzy scoring, clustering) | Done, in the `dn_core` library, wired into the GUI |
+| Test suite (57 test cases, including all 19 spec acceptance cases) | Done, all passing |
+| Directory scanning | Done (recursive/flat, include/exclude globs, hidden skip) |
+| GUI main window | Done — directory list, Scan button, match queue |
+| Match queue in the GUI | Done — tree of MATCH groups, expandable to member files |
+| Path lists / INI persistence | Not started (directory list is in-memory only for now) |
 | Options dialog | Not started |
 | Duplicate deletion | Not started |
 

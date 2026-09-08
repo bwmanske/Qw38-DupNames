@@ -23,7 +23,7 @@ ctest  --test-dir build -C Release                 # run all tests
 ## Layout / boundaries
 
 - **`dn_core`** (static lib) = ALL logic: matching, scanning, persistence. `src/*.cpp` + `include/dn/*.hpp`, namespace `dn`. Shared by the app and the tests — put new logic here, not in the GUI.
-- **`DupNames`** (exe, `WIN32` GUI subsystem) = `src/main.cpp` + `src/gui/*`. Links `dn_core comctl32 gdiplus shell32`.
+- **`DupNames`** (exe, `WIN32` GUI subsystem) = `src/main.cpp` + `src/gui/*`. Links `dn_core comctl32 gdiplus shell32 ole32`.
 - **`dn_tests`** (exe) = `tests/*.cpp`. Links `dn_core` + doctest.
 - `third_party/doctest.h` = vendored doctest (header-only).
 - `tools/gen_fold_table/` = one-off codegen for the Latin fold table (emits `include/dn/fold_table.hpp`); not yet implemented.
@@ -49,4 +49,5 @@ ctest  --test-dir build -C Release                 # run all tests
 - P0 scaffold done: configures, builds clean, smoke test passes, GUI launches.
 - P1 matching core done: normalization, folding, scoring, clustering; 37 test cases green.
 - P2 scanner done: `dn::scan()` (recursive/flat, include/exclude globs, hidden skip, progress callback) in `src/scanner.cpp`; 52 test cases green.
-- Pending: P3 GUI queue (M1) → P4 lists/INI → P5 options → P6 deletion → P7 hardening.
+- P3 GUI queue (M1) done: `src/gui/app.cpp` — in-memory dir list (add/remove via folder dialog), Scan button, tree-view queue of MATCH clusters; `dn::match()` pipeline (normalize→block→score→cluster) in `src/match.cpp`; 57 test cases green.
+- Pending: P4 lists/INI → P5 options → P6 deletion → P7 hardening.

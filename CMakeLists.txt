@@ -31,6 +31,7 @@ add_library(dn_core
   src/cluster.cpp
   src/blocking.cpp
   src/scanner.cpp
+  src/match.cpp
 )
 target_include_directories(dn_core PUBLIC include)
 
@@ -45,8 +46,9 @@ target_include_directories(doctest INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_p
 # ---------------------------------------------------------------------------
 add_executable(DupNames WIN32
   src/main.cpp
+  src/gui/app.cpp
 )
-target_link_libraries(DupNames PRIVATE dn_core comctl32 gdiplus shell32)
+target_link_libraries(DupNames PRIVATE dn_core comctl32 gdiplus shell32 ole32)
 
 # ---------------------------------------------------------------------------
 # Tests.
@@ -64,6 +66,7 @@ if(DN_TESTS)
     tests/test_blocking.cpp
     tests/test_acceptance.cpp
     tests/test_scanner.cpp
+    tests/test_match.cpp
   )
   target_link_libraries(dn_tests PRIVATE dn_core doctest)
   if(MSVC)
