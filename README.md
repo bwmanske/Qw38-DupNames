@@ -17,6 +17,9 @@ cmake -B build -G "Visual Studio 18 2026" -A x64   # configure (once)
 cmake --build build --config Release               # build
 ```
 
+See [docs/BUILDING.md](docs/BUILDING.md) for prerequisites, build options, and
+troubleshooting.
+
 Artifacts land in `build\Release\`:
 
 - `DupNames.exe` — the GUI app
@@ -35,6 +38,9 @@ Run a single doctest case:
 build\Release\dn_tests.exe -tc="<test case name>"
 ```
 
+See [docs/TESTING.md](docs/TESTING.md) for running subsets, reporters, and
+writing new tests.
+
 ## Project layout
 
 ```
@@ -44,7 +50,8 @@ src/                  core logic (dn_core) + GUI (DupNames)
 tests/                doctest test cases
 third_party/doctest.h vendored doctest (header-only)
 specs/SPEC.md         matching-algorithm specification
-docs/                 original CLI design docs (partially obsolete)
+docs/                 BUILDING.md, TESTING.md, USER_GUIDE.md, and the
+                      original CLI design docs (partially obsolete)
 tools/                one-off codegen utilities
 ```
 
