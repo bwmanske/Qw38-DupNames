@@ -42,7 +42,7 @@ ctest  --test-dir build -C Release                 # run all tests
 
 ## User data
 
-- `%APPDATA%\DupNames\DupNames.ini` (i.e. `C:\Users\<user>\AppData\Roaming\DupNames\DupNames.ini`; default, overridable with `--ini FILE`). Sections: `[InitState]` (startup options; first two: `MatchThreshold`, `CloseThreshold`) and `[PathList]` (`ProtectedPathN=<path>` never delete, `CommonPathN=<path>` deletable; local and UNC paths). CLI `--match`/`--close` override the INI and are written back to it (the `--ini` file if given, else the default INI). The path list is loaded on startup and saved on exit. See `docs/USER_GUIDE.md` and PLAN.md Phase 8.
+- `%APPDATA%\DupNames\DupNames.ini` (i.e. `C:\Users\<user>\AppData\Roaming\DupNames\DupNames.ini`; default, overridable with `--ini FILE`). Sections: `[InitState]` (13 startup/matching/scanning options: `MatchThreshold`, `CloseThreshold`, `MergeClose`, `YearLo`, `YearHi`, `WYear`, `WTokens`, `YearCap`, `Recursive`, `SkipHidden`, `Include`, `Exclude`, `Junk`) and `[PathList]` (`ProtectedPathN=<path>` never delete, `CommonPathN=<path>` deletable; local and UNC paths). CLI `--match`/`--close` override the INI and are written back to it (the `--ini` file if given, else the default INI). The path list is loaded on startup and saved on exit; `[InitState]` is loaded on startup and saved on exit and on Options-OK. See `docs/USER_GUIDE.md` and PLAN.md Phase 8.
 
 ## Status
 
@@ -51,4 +51,6 @@ ctest  --test-dir build -C Release                 # run all tests
 - P2 scanner done: `dn::scan()` (recursive/flat, include/exclude globs, hidden skip, progress callback) in `src/scanner.cpp`; 52 test cases green.
 - P3 GUI queue (M1) done: `src/gui/app.cpp` — in-memory dir list (add/remove via folder dialog), Scan button, tree-view queue of MATCH clusters; `dn::match()` pipeline (normalize→block→score→cluster) in `src/match.cpp`; 57 test cases green.
 - P4 lists/INI done: `dn::ini` (Win32 INI I/O, default path, load/save `[InitState]`+`[PathList]`, `resolve_config` precedence) in `src/ini.cpp`; `dn::parse_cli` (`--ini`/`--match`/`--close`) in `src/cli.cpp`; GUI loads the path list on start, saves on exit, applies thresholds; 79 test cases green.
-- Pending: P5 options → P6 deletion → P7 hardening.
+- P5 options done: `src/gui/options.cpp` — modal Options dialog (Matching/Scanning/Junk groups, validated, saved to INI on OK); `dn::ini` extended with `ini_get/set_bool`/`ini_get/set_int`/`ini_has_key` and full 13-key `[InitState]` load/save (presence-detected, so an empty `Junk=` overrides to no tokens); 85 test cases green.
+  - **Known issue (tabled):** changing a value in the dialog and clicking OK reports "Options saved." and calls `ini_save_state`, but the INI can retain the prior/default value (repro: set `MatchThreshold` to 0.99, OK → INI still 0.85). `ini_save_state`, `show_options`, and `validate_and_apply` all look correct and the control read-back confirms the new value, so the root cause is not yet pinned down. Investigate before relying on Options persistence.
+- Pending: P6 deletion → P7 hardening.

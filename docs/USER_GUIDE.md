@@ -47,12 +47,14 @@ The main window (titled **DupNames**, 900 x 640) has three parts:
 - **Scan** (top-right): scans the listed directories, finds similar file
   names, and fills the queue below. The status line reports how many files
   were scanned and how many match groups were found.
+- **Options...** (top-right): opens the options dialog to change the matching
+  and scanning settings (thresholds, year range, weights, recursive/hidden,
+  include/exclude globs, and the junk-token list). Changes are applied on **OK**
+  and saved to the INI `[InitState]` immediately (see
+  [Options dialog](#options-dialog)).
 - **Matches** (bottom): a tree of match groups. Each top-level node is a group
   (the representative name plus a count); expand it to see every file in the
   group with its directory.
-
-There are no menus or settings dialog yet (see
-[What's implemented](#whats-implemented)).
 
 ## Command line
 
@@ -96,15 +98,25 @@ sections are created on first save if they do not already exist.
 
 ### `[InitState]` — startup options
 
-Options that control how the app starts up and matches. The first two:
+Options that control how the app matches and scans. All are editable in the
+[Options dialog](#options-dialog); every key is written on save, so a fresh INI
+contains the full set.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `MatchThreshold` | `0.85` | Score at or above which a pair is a MATCH. |
-| `CloseThreshold` | `0.60` | Score at or above which (and below the match threshold) a pair is CLOSE. |
-
-`[InitState]` is the general home for startup options; further options may be
-added to this section over time.
+| `MatchThreshold` | `0.85` | Score at or above which a pair is a MATCH (0–1). |
+| `CloseThreshold` | `0.60` | Score at or above which (and below the match threshold) a pair is CLOSE (0–1). |
+| `MergeClose` | `false` | When true, CLOSE pairs are merged into their MATCH group in the queue. |
+| `YearLo` | `1900` | Lower bound of the recognized year range. |
+| `YearHi` | `2099` | Upper bound of the recognized year range (must be > `YearLo`). |
+| `WYear` | `0.3` | Weight of year agreement in the similarity score (0–1). |
+| `WTokens` | `0.7` | Weight of token similarity in the similarity score (0–1). |
+| `YearCap` | `0.5` | Maximum score a pair with a year mismatch can reach (0–1). |
+| `Recursive` | `false` | When true, scan subdirectories as well as the listed folders. |
+| `SkipHidden` | `true` | When true, skip hidden files and directories. |
+| `Include` | `*` | Comma-separated glob(s) of file names to include. |
+| `Exclude` | *(empty)* | Comma-separated glob(s) of file names to exclude. |
+| `Junk` | `the,extended,1080p,x264,720p,bluray,directors` | Comma-separated junk tokens stripped before matching. |
 
 ### `[PathList]` — directories to scan
 
@@ -132,19 +144,36 @@ CommonPath1 = E:\Downloads
 CommonPath2 = \\fileserver\share\inbox
 ```
 
+## Options dialog
+
+The **Options...** button opens a modal dialog with three groups:
+
+- **Matching** — match/close thresholds, the "merge CLOSE" toggle, the year
+  range (lo–hi), the year/token weights, and the year cap.
+- **Scanning** — recursive and skip-hidden toggles, plus the include and
+  exclude glob patterns.
+- **Junk tokens** — a multi-line list (one token per line) of tokens to strip
+  before matching; stored comma-separated in the INI `Junk` key.
+
+Values are validated on **OK**: thresholds and weights must be numbers in
+0–1, and the year lo must be less than the year hi. An invalid value shows a
+warning and keeps the dialog open so you can correct it. **OK** applies the
+changes and saves them to the INI immediately; **Cancel** (or closing the
+dialog) discards them.
+
 ## What's implemented
 
 | Area | State |
 |---|---|
 | Project build (CMake, MSVC) | Done |
 | Name matching core (normalization, Unicode folding, year extraction, junk-token removal, fuzzy scoring, clustering) | Done, in the `dn_core` library, wired into the GUI |
-| Test suite (79 test cases, including all 19 spec acceptance cases) | Done, all passing |
+| Test suite (85 test cases, including all 19 spec acceptance cases) | Done, all passing |
 | Directory scanning | Done (recursive/flat, include/exclude globs, hidden skip) |
 | GUI main window | Done — directory list, Scan button, match queue |
 | Match queue in the GUI | Done — tree of MATCH groups, expandable to member files |
 | Command line (`--ini` / `--match` / `--close`) | Done, with INI write-back |
 | Path lists / INI persistence | Done — loaded on start, saved on exit; local + UNC paths |
-| Options dialog | Not started |
+| Options dialog | Done — matching/scanning/junk settings, validated, saved to INI on OK |
 | Duplicate deletion | Not started |
 
 ## How matching will work (preview)

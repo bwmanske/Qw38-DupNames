@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <cwchar>
+#include <cwctype>
 #include <filesystem>
+#include <string>
 #include <system_error>
 
 namespace dn {
@@ -33,6 +35,54 @@ long key_number(const std::wstring& key, const std::wstring& prefix) {
     for (const wchar_t c : num)
         if (c < L'0' || c > L'9') return -1;
     return std::wcstol(num.c_str(), nullptr, 10);
+}
+
+std::wstring to_wide(const std::string& s) {
+    if (s.empty()) return {};
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
+                                      nullptr, 0);
+    std::wstring out(static_cast<std::size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), out.data(), n);
+    return out;
+}
+
+std::string to_narrow(const std::wstring& s) {
+    if (s.empty()) return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
+                                      nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<std::size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), out.data(), n,
+                        nullptr, nullptr);
+    return out;
+}
+
+// Join junk tokens with ',' (the on-disk form of the Junk key).
+std::wstring join_junk(const std::vector<std::string>& junk) {
+    std::wstring out;
+    for (std::size_t i = 0; i < junk.size(); ++i) {
+        if (i) out += L",";
+        out += to_wide(junk[i]);
+    }
+    return out;
+}
+
+// Split a comma-separated string into tokens, trimming surrounding whitespace
+// and dropping empty entries.
+std::vector<std::string> split_junk(const std::wstring& s) {
+    std::vector<std::string> out;
+    std::wstring cur;
+    auto flush = [&]() {
+        const std::size_t b = cur.find_first_not_of(L" \t");
+        if (b != std::wstring::npos) {
+            const std::size_t e = cur.find_last_not_of(L" \t");
+            out.push_back(to_narrow(cur.substr(b, e - b + 1)));
+        }
+        cur.clear();
+    };
+    for (const wchar_t c : s)
+        (c == L',') ? flush() : cur.push_back(c);
+    flush();
+    return out;
 }
 
 }  // namespace
@@ -70,6 +120,43 @@ void ini_set_double(const std::wstring& file, const std::wstring& section,
     ini_set_string(file, section, key, buf);
 }
 
+bool ini_get_bool(const std::wstring& file, const std::wstring& section,
+                  const std::wstring& key, bool def) {
+    const std::wstring s = ini_get_string(file, section, key, L"");
+    if (s.empty()) return def;
+    std::wstring lower;
+    lower.reserve(s.size());
+    for (wchar_t c : s) lower.push_back(static_cast<wchar_t>(std::towlower(c)));
+    if (lower == L"true" || lower == L"1") return true;
+    if (lower == L"false" || lower == L"0") return false;
+    return def;
+}
+
+void ini_set_bool(const std::wstring& file, const std::wstring& section,
+                  const std::wstring& key, bool value) {
+    ini_set_string(file, section, key, value ? L"true" : L"false");
+}
+
+int ini_get_int(const std::wstring& file, const std::wstring& section,
+                const std::wstring& key, int def) {
+    const std::wstring s = ini_get_string(file, section, key, L"");
+    if (s.empty()) return def;
+    try {
+        std::size_t pos = 0;
+        const long v = std::stol(s, &pos);
+        return static_cast<int>(v);
+    } catch (...) {
+        return def;
+    }
+}
+
+void ini_set_int(const std::wstring& file, const std::wstring& section,
+                 const std::wstring& key, int value) {
+    wchar_t buf[32];
+    swprintf(buf, 32, L"%d", value);
+    ini_set_string(file, section, key, buf);
+}
+
 std::vector<std::wstring> ini_section_keys(const std::wstring& file,
                                            const std::wstring& section) {
     std::vector<std::wstring> keys;
@@ -87,6 +174,13 @@ std::vector<std::wstring> ini_section_keys(const std::wstring& file,
     return keys;
 }
 
+bool ini_has_key(const std::wstring& file, const std::wstring& section,
+                 const std::wstring& key) {
+    for (const auto& k : ini_section_keys(file, section))
+        if (k == key) return true;
+    return false;
+}
+
 std::wstring default_ini_path() {
     wchar_t appdata[MAX_PATH] = {};
     if (GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH) == 0)
@@ -95,15 +189,57 @@ std::wstring default_ini_path() {
 }
 
 void ini_load_state(const std::wstring& file, Config& cfg) {
-    const std::wstring m = ini_get_string(file, L"InitState", L"MatchThreshold", L"");
-    if (!m.empty()) cfg.match_threshold = ini_get_double(file, L"InitState", L"MatchThreshold", cfg.match_threshold);
-    const std::wstring c = ini_get_string(file, L"InitState", L"CloseThreshold", L"");
-    if (!c.empty()) cfg.close_threshold = ini_get_double(file, L"InitState", L"CloseThreshold", cfg.close_threshold);
+    const std::wstring sec = L"InitState";
+    // Override a field only if its key is present in the INI, so built-in
+    // defaults survive a partial/older INI. Presence (not non-emptiness) is
+    // what matters: a present-but-empty Junk key means "no junk tokens".
+    const auto keys = ini_section_keys(file, sec);
+    const auto has = [&keys](const wchar_t* k) {
+        return std::find(keys.begin(), keys.end(), k) != keys.end();
+    };
+    if (has(L"MatchThreshold"))
+        cfg.match_threshold = ini_get_double(file, sec, L"MatchThreshold", cfg.match_threshold);
+    if (has(L"CloseThreshold"))
+        cfg.close_threshold = ini_get_double(file, sec, L"CloseThreshold", cfg.close_threshold);
+    if (has(L"MergeClose"))
+        cfg.merge_close = ini_get_bool(file, sec, L"MergeClose", cfg.merge_close);
+    if (has(L"YearLo"))
+        cfg.year_lo = ini_get_int(file, sec, L"YearLo", cfg.year_lo);
+    if (has(L"YearHi"))
+        cfg.year_hi = ini_get_int(file, sec, L"YearHi", cfg.year_hi);
+    if (has(L"WYear"))
+        cfg.w_year = ini_get_double(file, sec, L"WYear", cfg.w_year);
+    if (has(L"WTokens"))
+        cfg.w_tokens = ini_get_double(file, sec, L"WTokens", cfg.w_tokens);
+    if (has(L"YearCap"))
+        cfg.year_cap = ini_get_double(file, sec, L"YearCap", cfg.year_cap);
+    if (has(L"Recursive"))
+        cfg.recursive = ini_get_bool(file, sec, L"Recursive", cfg.recursive);
+    if (has(L"SkipHidden"))
+        cfg.skip_hidden = ini_get_bool(file, sec, L"SkipHidden", cfg.skip_hidden);
+    if (has(L"Include"))
+        cfg.include = to_narrow(ini_get_string(file, sec, L"Include", L""));
+    if (has(L"Exclude"))
+        cfg.exclude = to_narrow(ini_get_string(file, sec, L"Exclude", L""));
+    if (has(L"Junk"))
+        cfg.junk = split_junk(ini_get_string(file, sec, L"Junk", L""));
 }
 
 void ini_save_state(const std::wstring& file, const Config& cfg) {
-    ini_set_double(file, L"InitState", L"MatchThreshold", cfg.match_threshold);
-    ini_set_double(file, L"InitState", L"CloseThreshold", cfg.close_threshold);
+    const std::wstring sec = L"InitState";
+    ini_set_double(file, sec, L"MatchThreshold", cfg.match_threshold);
+    ini_set_double(file, sec, L"CloseThreshold", cfg.close_threshold);
+    ini_set_bool(file, sec, L"MergeClose", cfg.merge_close);
+    ini_set_int(file, sec, L"YearLo", cfg.year_lo);
+    ini_set_int(file, sec, L"YearHi", cfg.year_hi);
+    ini_set_double(file, sec, L"WYear", cfg.w_year);
+    ini_set_double(file, sec, L"WTokens", cfg.w_tokens);
+    ini_set_double(file, sec, L"YearCap", cfg.year_cap);
+    ini_set_bool(file, sec, L"Recursive", cfg.recursive);
+    ini_set_bool(file, sec, L"SkipHidden", cfg.skip_hidden);
+    ini_set_string(file, sec, L"Include", to_wide(cfg.include));
+    ini_set_string(file, sec, L"Exclude", to_wide(cfg.exclude));
+    ini_set_string(file, sec, L"Junk", join_junk(cfg.junk));
 }
 
 Config resolve_config(const std::wstring& ini_path, const CliArgs& cli) {

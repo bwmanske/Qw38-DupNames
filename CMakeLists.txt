@@ -49,6 +49,7 @@ target_include_directories(doctest INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_p
 add_executable(DupNames WIN32
   src/main.cpp
   src/gui/app.cpp
+  src/gui/options.cpp
 )
 target_link_libraries(DupNames PRIVATE dn_core comctl32 gdiplus shell32 ole32)
 

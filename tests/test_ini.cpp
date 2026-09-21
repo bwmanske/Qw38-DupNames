@@ -173,3 +173,137 @@ TEST_CASE("ini: resolve_config write-back targets the given INI only") {
     CHECK(ini_get_double(a.path, L"InitState", L"MatchThreshold", 0.0) == doctest::Approx(0.42));
     CHECK(ini_get_double(b.path, L"InitState", L"MatchThreshold", 0.0) == 0.0);
 }
+
+TEST_CASE("ini: bool round-trip and parse variants") {
+    TempIni t;
+    ini_set_bool(t.path, L"InitState", L"Recursive", true);
+    ini_set_bool(t.path, L"InitState", L"SkipHidden", false);
+    CHECK(ini_get_bool(t.path, L"InitState", L"Recursive", false));
+    CHECK_FALSE(ini_get_bool(t.path, L"InitState", L"SkipHidden", true));
+
+    // Accepts 1/0 and is case-insensitive.
+    ini_set_string(t.path, L"InitState", L"A", L"1");
+    ini_set_string(t.path, L"InitState", L"B", L"0");
+    ini_set_string(t.path, L"InitState", L"C", L"TRUE");
+    ini_set_string(t.path, L"InitState", L"D", L"False");
+    CHECK(ini_get_bool(t.path, L"InitState", L"A", false));
+    CHECK_FALSE(ini_get_bool(t.path, L"InitState", L"B", true));
+    CHECK(ini_get_bool(t.path, L"InitState", L"C", false));
+    CHECK_FALSE(ini_get_bool(t.path, L"InitState", L"D", true));
+
+    // Unrecognised value and missing key fall back to the default.
+    ini_set_string(t.path, L"InitState", L"E", L"garbage");
+    CHECK(ini_get_bool(t.path, L"InitState", L"E", true));
+    CHECK_FALSE(ini_get_bool(t.path, L"InitState", L"Missing", false));
+}
+
+TEST_CASE("ini: int round-trip and fallback") {
+    TempIni t;
+    ini_set_int(t.path, L"InitState", L"YearLo", 1950);
+    ini_set_int(t.path, L"InitState", L"YearHi", 2050);
+    CHECK(ini_get_int(t.path, L"InitState", L"YearLo", 0) == 1950);
+    CHECK(ini_get_int(t.path, L"InitState", L"YearHi", 0) == 2050);
+    // Missing key -> default; non-numeric -> default.
+    CHECK(ini_get_int(t.path, L"InitState", L"Missing", 42) == 42);
+    ini_set_string(t.path, L"InitState", L"Bad", L"notanint");
+    CHECK(ini_get_int(t.path, L"InitState", L"Bad", 7) == 7);
+}
+
+TEST_CASE("ini: load/save state round-trips every option key") {
+    TempIni t;
+    Config in;
+    in.match_threshold = 0.91;
+    in.close_threshold = 0.55;
+    in.merge_close = true;
+    in.year_lo = 1975;
+    in.year_hi = 2040;
+    in.w_year = 0.4;
+    in.w_tokens = 0.6;
+    in.year_cap = 0.35;
+    in.recursive = true;
+    in.skip_hidden = false;
+    in.include = "*.mkv";
+    in.exclude = "*.tmp";
+    in.junk = {"the", "extended", "1080p", "x264", "720p", "bluray", "directors", "remastered"};
+    ini_save_state(t.path, in);
+
+    Config out;  // starts at built-in defaults
+    ini_load_state(t.path, out);
+    CHECK(out.match_threshold == doctest::Approx(0.91));
+    CHECK(out.close_threshold == doctest::Approx(0.55));
+    CHECK(out.merge_close);
+    CHECK(out.year_lo == 1975);
+    CHECK(out.year_hi == 2040);
+    CHECK(out.w_year == doctest::Approx(0.4));
+    CHECK(out.w_tokens == doctest::Approx(0.6));
+    CHECK(out.year_cap == doctest::Approx(0.35));
+    CHECK(out.recursive);
+    CHECK_FALSE(out.skip_hidden);
+    CHECK(out.include == "*.mkv");
+    CHECK(out.exclude == "*.tmp");
+    CHECK(out.junk == in.junk);
+}
+
+TEST_CASE("ini: load_state leaves defaults for absent keys") {
+    TempIni t;
+    // Only write two keys; everything else must keep its built-in default.
+    ini_set_double(t.path, L"InitState", L"MatchThreshold", 0.77);
+    ini_set_bool(t.path, L"InitState", L"Recursive", true);
+
+    Config cfg;  // defaults
+    ini_load_state(t.path, cfg);
+    CHECK(cfg.match_threshold == doctest::Approx(0.77));
+    CHECK(cfg.recursive);
+    CHECK(cfg.close_threshold == doctest::Approx(0.60));  // default
+    CHECK_FALSE(cfg.merge_close);                          // default
+    CHECK(cfg.year_lo == 1900);                            // default
+    CHECK(cfg.year_hi == 2099);                            // default
+    CHECK(cfg.w_year == doctest::Approx(0.30));            // default
+    CHECK(cfg.w_tokens == doctest::Approx(0.70));          // default
+    CHECK(cfg.year_cap == doctest::Approx(0.50));          // default
+    CHECK(cfg.skip_hidden);                                 // default
+    CHECK(cfg.include == "*");                              // default
+    CHECK(cfg.exclude.empty());                             // default
+    CHECK(cfg.junk.size() == 7);                            // default junk list
+}
+
+TEST_CASE("ini: junk list round-trips with spaces and empty entries") {
+    TempIni t;
+    Config in;
+    in.junk = {"the", "extended cut", "1080p"};
+    ini_save_state(t.path, in);
+    // On disk it is a single comma-separated value.
+    CHECK(ini_get_string(t.path, L"InitState", L"Junk", L"") == L"the,extended cut,1080p");
+
+    Config out;
+    ini_load_state(t.path, out);
+    CHECK(out.junk == in.junk);
+
+    // An empty junk list round-trips to empty.
+    Config empty;
+    empty.junk.clear();
+    ini_save_state(t.path, empty);
+    Config out2;
+    ini_load_state(t.path, out2);
+    CHECK(out2.junk.empty());
+}
+
+TEST_CASE("ini: resolve_config loads INI options, not just thresholds") {
+    TempIni t;
+    Config in;
+    in.recursive = true;
+    in.merge_close = true;
+    in.year_lo = 1990;
+    in.year_hi = 2030;
+    in.include = "*.avi";
+    ini_save_state(t.path, in);
+
+    const auto cfg = resolve_config(t.path, CliArgs{});
+    CHECK(cfg.recursive);
+    CHECK(cfg.merge_close);
+    CHECK(cfg.year_lo == 1990);
+    CHECK(cfg.year_hi == 2030);
+    CHECK(cfg.include == "*.avi");
+    // A key not in the INI keeps its default.
+    CHECK(cfg.close_threshold == doctest::Approx(0.60));
+}

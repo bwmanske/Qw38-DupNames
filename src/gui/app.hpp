@@ -32,6 +32,7 @@ private:
     void OnAddFolder();
     void OnRemoveFolder();
     void OnScan();
+    void OnOptions();
     void RefreshDirList();
     void SetStatus(const std::wstring& text);
     void PopulateQueue(const std::vector<dn::Cluster>& clusters);
@@ -43,6 +44,7 @@ private:
     HWND addBtn_ = nullptr;
     HWND removeBtn_ = nullptr;
     HWND scanBtn_ = nullptr;
+    HWND optionsBtn_ = nullptr;
     HWND status_ = nullptr;
 
     dn::CliArgs cli_;                  // parsed command-line options

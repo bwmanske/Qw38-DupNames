@@ -15,6 +15,8 @@
 #include "dn/match.hpp"
 #include "dn/scanner.hpp"
 
+#include "options.hpp"
+
 namespace gui {
 
 namespace {
@@ -23,6 +25,7 @@ constexpr wchar_t kClass[] = L"DNMainWnd";
 constexpr INT_PTR kIdAdd = 1001;
 constexpr INT_PTR kIdRemove = 1002;
 constexpr INT_PTR kIdScan = 1003;
+constexpr INT_PTR kIdOptions = 1007;
 constexpr INT_PTR kIdDirList = 1004;
 constexpr INT_PTR kIdQueue = 1005;
 constexpr INT_PTR kIdStatus = 1006;
@@ -131,6 +134,7 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (id == kIdAdd) OnAddFolder();
                 else if (id == kIdRemove) OnRemoveFolder();
                 else if (id == kIdScan) OnScan();
+                else if (id == kIdOptions) OnOptions();
             }
             return 0;
         }
@@ -168,8 +172,11 @@ void App::CreateControls() {
                                  94, 150, 80, 24, hwnd_, reinterpret_cast<HMENU>(kIdRemove),
                                  hInstance_, nullptr);
     scanBtn_ = CreateWindowExW(0, L"BUTTON", L"Scan", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                               800, 150, 82, 24, hwnd_, reinterpret_cast<HMENU>(kIdScan),
-                               hInstance_, nullptr);
+                                800, 150, 82, 24, hwnd_, reinterpret_cast<HMENU>(kIdScan),
+                                hInstance_, nullptr);
+    optionsBtn_ = CreateWindowExW(0, L"BUTTON", L"Options...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                   700, 150, 82, 24, hwnd_, reinterpret_cast<HMENU>(kIdOptions),
+                                   hInstance_, nullptr);
 
     CreateWindowExW(0, L"STATIC", L"Matches:", WS_CHILD | WS_VISIBLE,
                     8, 188, 200, 16, hwnd_, nullptr, hInstance_, nullptr);
@@ -197,6 +204,14 @@ void App::LoadState() {
 
 void App::SaveState() {
     dn::ini_save_paths(ini_path_, dirs_);
+    dn::ini_save_state(ini_path_, config_);
+}
+
+void App::OnOptions() {
+    if (show_options(hwnd_, hInstance_, config_)) {
+        dn::ini_save_state(ini_path_, config_);
+        SetStatus(L"Options saved.");
+    }
 }
 
 void App::Layout(int w, int h) {
@@ -206,6 +221,7 @@ void App::Layout(int w, int h) {
     MoveWindow(dirList_, 8, 28, w - 16, kTopPanelH - 40, TRUE);
     MoveWindow(addBtn_, 8, kTopPanelH - 30, 80, 24, TRUE);
     MoveWindow(removeBtn_, 94, kTopPanelH - 30, 80, 24, TRUE);
+    MoveWindow(optionsBtn_, w - 180, kTopPanelH - 30, 82, 24, TRUE);
     MoveWindow(scanBtn_, w - 90, kTopPanelH - 30, 82, 24, TRUE);
     MoveWindow(queue_, 8, queueTop, w - 16, h - queueTop - statusH, TRUE);
     MoveWindow(status_, 8, h - statusH, w - 16, statusH - 6, TRUE);
