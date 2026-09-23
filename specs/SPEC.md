@@ -254,3 +254,104 @@ To avoid comparing every pair:
    or only across directories?
 4. Is the v1 Latin-only folding table acceptable, or is full NFKD
    (ICU backend) required from the start?
+
+## 10. Screen Mockups
+
+The v1 product is a Win32 desktop GUI (this supersedes the CLI-only scope in
+§2). There are two custom screens — the **main window** and the **Options
+dialog** — plus the system folder browser invoked by **Add...**. The mockups
+below are not to scale; they show layout and content.
+
+### 10.1 Main window
+
+```
++--------------------------------------------------------------------+
+| DupNames                                                           |
++--------------------------------------------------------------------+
+| Directories:                                                       |
+| +---------------------------------------------------------------+  |
+| | Path                                                          |  |
+| | D:\Media\Movies                                               |  |
+| | E:\Downloads                                                  |  |
+| | \\fileserver\share\inbox                                      |  |
+| | \\fileserver\archive\protected  [protected]                   |  |
+| +---------------------------------------------------------------+  |
+| [Add...] [Remove]                          [Options...] [Scan]     |
+| Matches:                                                           |
+| +---------------------------------------------------------------+  |
+| | > The Matrix (1999)  (2)                                      |  |
+| |     the.matrix.1999.extended.1080p.x264  -  D:\Media\Movies   |  |
+| |     The Matrix (1999)  -  \\fileserver\share\inbox            |  |
+| | > Inception (2010)  (2)                                       |  |
+| |     inception.2010.1080p.x264  -  E:\Downloads                |  |
+| |     Inception (2010)  -  D:\Media\Movies                      |  |
+| +---------------------------------------------------------------+  |
+| Ready.                                                             |
++--------------------------------------------------------------------+
+```
+
+Elements:
+
+- **Directories** (list): the folders to scan, loaded from `[PathList]` on
+  start and saved on exit. A trailing `[protected]` marks a never-delete
+  path; folders added via **Add...** are common (deletable) paths.
+- **Add...**: opens the system folder browser to append a directory.
+- **Remove**: drops the selected directory.
+- **Options...**: opens the Options dialog (§10.2).
+- **Scan**: scans the listed directories and fills the Matches tree; the
+  status line reports `Scanned N file(s); M match group(s).`
+- **Matches** (tree): one node per MATCH cluster. The top-level node is the
+  cluster's representative name plus a member count; child nodes are the
+  member files, each shown with its directory.
+- **Status line**: transient messages (`Ready.`, `Loaded N director(y/ies)
+  from <path>`, `Scanning...`, `Options saved.`, scan results).
+
+### 10.2 Options dialog
+
+```
++--------------------------------------------------------------+
+| Options                                                      |
++--------------------------------------------------------------+
+| Matching                                                     |
+| +---------------------------------------------------------+  |
+| | Match threshold      [0.85                          ]   |  |
+| | Close threshold      [0.60                          ]   |  |
+| | [ ] Merge CLOSE                                         |  |
+| | Year range (lo-hi)   [1900] [2099]                     |  |
+| | Weights (yr/tok)      [0.3 ] [0.7 ]                    |  |
+| | Year cap             [0.50                          ]   |  |
+| +---------------------------------------------------------+  |
+| Scanning                                                     |
+| +---------------------------------------------------------+  |
+| | [ ] Recursive                                           |  |
+| | [x] Skip hidden                                         |  |
+| | Include              [*                             ]    |  |
+| | Exclude              [                              ]     |  |
+| +---------------------------------------------------------+  |
+| Junk tokens (one per line)                                   |
+| +---------------------------------------------------------+  |
+| | the                                                   |  |
+| | extended                                              |  |
+| | 1080p                                                 |  |
+| | x264                                                  |  |
+| | 720p                                                  |  |
+| | bluray                                                |  |
+| | directors                                             |  |
+| +---------------------------------------------------------+  |
+|                                    [OK] [Cancel]             |
++--------------------------------------------------------------+
+```
+
+Elements (each maps to an `[InitState]` key):
+
+- **Matching** — `MatchThreshold`, `CloseThreshold` (0–1), `MergeClose`
+  (toggle), `YearLo`/`YearHi` (integers, lo < hi), `WYear`/`WTokens` (0–1),
+  `YearCap` (0–1).
+- **Scanning** — `Recursive` and `SkipHidden` (toggles), `Include` and
+  `Exclude` (comma-separated globs).
+- **Junk tokens** — one token per line; stored comma-separated in `Junk`.
+
+Behavior: the dialog is modal. **OK** validates (thresholds/weights in 0–1,
+year lo < hi); an invalid field shows a warning and keeps the dialog open. On
+success the values are applied and saved to the INI immediately. **Cancel**
+(or closing the window) discards changes.

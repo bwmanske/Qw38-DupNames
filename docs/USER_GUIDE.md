@@ -52,9 +52,12 @@ The main window (titled **DupNames**, 900 x 640) has three parts:
   include/exclude globs, and the junk-token list). Changes are applied on **OK**
   and saved to the INI `[InitState]` immediately (see
   [Options dialog](#options-dialog)).
+- **Delete** (top-right): deletes the checked files from the match queue
+  (see [Deleting duplicates](#deleting-duplicates)).
 - **Matches** (bottom): a tree of match groups. Each top-level node is a group
   (the representative name plus a count); expand it to see every file in the
-  group with its directory.
+  group with its directory. Member rows have checkboxes for selecting which
+  files to delete.
 
 ## Command line
 
@@ -161,20 +164,46 @@ warning and keeps the dialog open so you can correct it. **OK** applies the
 changes and saves them to the INI immediately; **Cancel** (or closing the
 dialog) discards them.
 
+## Deleting duplicates
+
+After a scan, the match queue shows each group with its member files. Each
+member row has a checkbox. To delete duplicates:
+
+1. **Scan** the directories.
+2. In the **Matches** tree, expand a group and **check** the files you want
+   deleted (typically the copies in common / non-protected directories).
+3. Click **Delete**. A confirmation dialog shows how many files will be
+   deleted. Click **Yes** to proceed.
+4. Deleted files are removed:
+   - **Local paths** → sent to the Recycle Bin (recoverable).
+   - **UNC / network paths** → permanently removed (no Recycle Bin over the
+     network).
+5. The queue updates: deleted entries are removed from the tree. If a group
+   loses all its deletable members, the remaining (protected) entries stay.
+
+**Safety rules** (enforced by `plan_deletion` in `dn_core`):
+
+- Files in **protected** directories are never deleted, even if checked.
+- At least one file per group is always kept (the "keep-one" rule): if a
+  group has a protected member, all common copies may be deleted; if it has
+  no protected member, one common copy (the anchor) is kept.
+- Only files that are actually checked in the tree are candidates for
+  deletion.
+
 ## What's implemented
 
 | Area | State |
 |---|---|
 | Project build (CMake, MSVC) | Done |
 | Name matching core (normalization, Unicode folding, year extraction, junk-token removal, fuzzy scoring, clustering) | Done, in the `dn_core` library, wired into the GUI |
-| Test suite (85 test cases, including all 19 spec acceptance cases) | Done, all passing |
+| Test suite (93 test cases, including all 19 spec acceptance cases) | Done, all passing |
 | Directory scanning | Done (recursive/flat, include/exclude globs, hidden skip) |
 | GUI main window | Done — directory list, Scan button, match queue |
 | Match queue in the GUI | Done — tree of MATCH groups, expandable to member files |
 | Command line (`--ini` / `--match` / `--close`) | Done, with INI write-back |
 | Path lists / INI persistence | Done — loaded on start, saved on exit; local + UNC paths |
 | Options dialog | Done — matching/scanning/junk settings, validated, saved to INI on OK |
-| Duplicate deletion | Not started |
+| Duplicate deletion | Done — check members in the queue, click Delete; Recycle Bin (local) or permanent remove (UNC) |
 
 ## How matching will work (preview)
 

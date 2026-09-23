@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "dn/cli.hpp"
@@ -33,9 +34,11 @@ private:
     void OnRemoveFolder();
     void OnScan();
     void OnOptions();
+    void OnDelete();
     void RefreshDirList();
     void SetStatus(const std::wstring& text);
     void PopulateQueue(const std::vector<dn::Cluster>& clusters);
+    void RemoveDeletedItems(const std::vector<std::size_t>& deleted);
 
     HINSTANCE hInstance_ = nullptr;
     HWND hwnd_ = nullptr;
@@ -45,6 +48,7 @@ private:
     HWND removeBtn_ = nullptr;
     HWND scanBtn_ = nullptr;
     HWND optionsBtn_ = nullptr;
+    HWND deleteBtn_ = nullptr;
     HWND status_ = nullptr;
 
     dn::CliArgs cli_;                  // parsed command-line options
@@ -52,6 +56,8 @@ private:
     dn::Config config_;                // effective config (default <- INI <- CLI)
     std::vector<dn::DirEntry> dirs_;   // path list (loaded from / saved to INI)
     std::vector<dn::FileEntry> entries_;  // last scan results
+    std::vector<dn::Cluster> clusters_;   // last scan's clusters (for deletion)
+    std::unordered_map<std::size_t, HANDLE> member_items_;  // entry index -> tree item
 };
 
 }  // namespace gui

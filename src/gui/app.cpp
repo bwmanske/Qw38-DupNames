@@ -4,18 +4,27 @@
 
 #include <objbase.h>
 #include <shobjidl.h>
+#include <shellapi.h>
 #include <commctrl.h>
 
 #include <algorithm>
 #include <filesystem>
 #include <string>
+#include <system_error>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
+#include "dn/deletion.hpp"
 #include "dn/ini.hpp"
 #include "dn/match.hpp"
 #include "dn/scanner.hpp"
 
 #include "options.hpp"
+
+#ifndef TVIS_CHECKED
+#define TVIS_CHECKED 0x00000004
+#endif
 
 namespace gui {
 
@@ -26,6 +35,7 @@ constexpr INT_PTR kIdAdd = 1001;
 constexpr INT_PTR kIdRemove = 1002;
 constexpr INT_PTR kIdScan = 1003;
 constexpr INT_PTR kIdOptions = 1007;
+constexpr INT_PTR kIdDelete = 1008;
 constexpr INT_PTR kIdDirList = 1004;
 constexpr INT_PTR kIdQueue = 1005;
 constexpr INT_PTR kIdStatus = 1006;
@@ -57,6 +67,37 @@ HTREEITEM insert_tree_item(HWND tree, HTREEITEM parent, const std::wstring& text
     item.hItem = parent;  // TVI_ROOT for a top-level item, else the parent item
     item.pszText = const_cast<LPWSTR>(text.c_str());
     return TreeView_InsertItem(tree, &item);
+}
+
+// Delete the given files. Local files go to the Recycle Bin (recoverable);
+// UNC/network files are removed directly (the Recycle Bin does not support
+// network paths). Returns the number of files successfully deleted and appends
+// any error text to `error`.
+int delete_files(const std::vector<std::wstring>& paths, std::wstring& error) {
+    std::vector<std::wstring> local, unc;
+    for (const auto& p : paths)
+        (p.size() >= 2 && p[0] == L'\\' && p[1] == L'\\' ? unc : local).push_back(p);
+
+    int deleted = 0;
+    if (!local.empty()) {
+        std::wstring list;
+        for (const auto& p : local) { list += p; list += L'\0'; }
+        list += L'\0';  // double-null terminate the array
+        SHFILEOPSTRUCTW op{};
+        op.wFunc = FO_DELETE;
+        op.pFrom = list.c_str();
+        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT;
+        if (SHFileOperationW(&op) == 0 && !op.fAnyOperationsAborted)
+            deleted += static_cast<int>(local.size());
+        else
+            error += L"Could not move some files to the Recycle Bin.\n";
+    }
+    for (const auto& p : unc) {
+        std::error_code ec;
+        if (std::filesystem::remove(p, ec)) ++deleted;
+        else error += p + L": " + to_wide(ec.message()) + L"\n";
+    }
+    return deleted;
 }
 
 }  // namespace
@@ -135,6 +176,7 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 else if (id == kIdRemove) OnRemoveFolder();
                 else if (id == kIdScan) OnScan();
                 else if (id == kIdOptions) OnOptions();
+                else if (id == kIdDelete) OnDelete();
             }
             return 0;
         }
@@ -177,15 +219,18 @@ void App::CreateControls() {
     optionsBtn_ = CreateWindowExW(0, L"BUTTON", L"Options...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                                    700, 150, 82, 24, hwnd_, reinterpret_cast<HMENU>(kIdOptions),
                                    hInstance_, nullptr);
+    deleteBtn_ = CreateWindowExW(0, L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                  788, 150, 82, 24, hwnd_, reinterpret_cast<HMENU>(kIdDelete),
+                                  hInstance_, nullptr);
 
     CreateWindowExW(0, L"STATIC", L"Matches:", WS_CHILD | WS_VISIBLE,
                     8, 188, 200, 16, hwnd_, nullptr, hInstance_, nullptr);
 
     queue_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
-                             WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_HASBUTTONS |
-                                 TVS_SHOWSELALWAYS,
-                             8, 208, 400, 300, hwnd_, reinterpret_cast<HMENU>(kIdQueue),
-                             hInstance_, nullptr);
+                              WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_HASBUTTONS |
+                                  TVS_SHOWSELALWAYS | TVS_CHECKBOXES,
+                              8, 208, 400, 300, hwnd_, reinterpret_cast<HMENU>(kIdQueue),
+                              hInstance_, nullptr);
 
     status_ = CreateWindowExW(0, L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE | SS_LEFT,
                                8, 600, 400, 18, hwnd_, reinterpret_cast<HMENU>(kIdStatus),
@@ -221,8 +266,9 @@ void App::Layout(int w, int h) {
     MoveWindow(dirList_, 8, 28, w - 16, kTopPanelH - 40, TRUE);
     MoveWindow(addBtn_, 8, kTopPanelH - 30, 80, 24, TRUE);
     MoveWindow(removeBtn_, 94, kTopPanelH - 30, 80, 24, TRUE);
-    MoveWindow(optionsBtn_, w - 180, kTopPanelH - 30, 82, 24, TRUE);
-    MoveWindow(scanBtn_, w - 90, kTopPanelH - 30, 82, 24, TRUE);
+    MoveWindow(optionsBtn_, w - 270, kTopPanelH - 30, 82, 24, TRUE);
+    MoveWindow(scanBtn_, w - 180, kTopPanelH - 30, 82, 24, TRUE);
+    MoveWindow(deleteBtn_, w - 90, kTopPanelH - 30, 82, 24, TRUE);
     MoveWindow(queue_, 8, queueTop, w - 16, h - queueTop - statusH, TRUE);
     MoveWindow(status_, 8, h - statusH, w - 16, statusH - 6, TRUE);
 }
@@ -293,28 +339,144 @@ void App::OnScan() {
     UpdateWindow(hwnd_);
 
     entries_ = dn::scan(dirs_, config_, {});
-    const auto clusters = dn::match(entries_, config_);
-    PopulateQueue(clusters);
+    clusters_ = dn::match(entries_, config_);
+    PopulateQueue(clusters_);
 
     SetStatus(L"Scanned " + std::to_wstring(entries_.size()) + L" file(s); " +
-              std::to_wstring(clusters.size()) + L" match group(s).");
+              std::to_wstring(clusters_.size()) + L" match group(s).");
 }
 
 void App::PopulateQueue(const std::vector<dn::Cluster>& clusters) {
     TreeView_DeleteAllItems(queue_);
-    for (const auto& cl : clusters) {
+    member_items_.clear();
+    for (std::size_t ci = 0; ci < clusters.size(); ++ci) {
+        const auto& cl = clusters[ci];
         const auto& anchor = entries_[cl.anchor];
         const std::wstring header = to_wide(anchor.name) + L"  (" +
                                     std::to_wstring(cl.members.size()) + L")";
         HTREEITEM parent = insert_tree_item(queue_, TVI_ROOT, header);
+        TVITEMW pit{};
+        pit.hItem = parent;
+        pit.mask = TVIF_PARAM;
+        pit.lParam = static_cast<LPARAM>(ci);  // cluster index
+        TreeView_SetItem(queue_, &pit);
         for (const auto idx : cl.members) {
             const auto& e = entries_[idx];
             const std::wstring child = to_wide(e.name) + L"  -  " +
                                        to_wide(e.path.parent_path().string());
-            insert_tree_item(queue_, parent, child);
+            HTREEITEM item = insert_tree_item(queue_, parent, child);
+            TVITEMW cit{};
+            cit.hItem = item;
+            cit.mask = TVIF_PARAM;
+            cit.lParam = static_cast<LPARAM>(idx);  // entry index
+            TreeView_SetItem(queue_, &cit);
+            member_items_[idx] = item;
         }
     }
     TreeView_Expand(queue_, TVI_ROOT, TVE_EXPAND);
+}
+
+void App::OnDelete() {
+    if (entries_.empty() || clusters_.empty()) {
+        SetStatus(L"Nothing to delete. Scan first, then check files to remove.");
+        return;
+    }
+
+    // Collect the checked member (child) nodes.
+    std::vector<bool> selected(entries_.size(), false);
+    for (HTREEITEM it = TreeView_GetRoot(queue_); it; it = TreeView_GetNextSibling(queue_, it)) {
+        for (HTREEITEM child = TreeView_GetChild(queue_, it); child;
+             child = TreeView_GetNextSibling(queue_, child)) {
+            TVITEMW ti{};
+            ti.hItem = child;
+            ti.mask = TVIS_STATEIMAGEMASK | TVIF_PARAM;
+            if (TreeView_GetItem(queue_, &ti) && (ti.state & TVIS_CHECKED)) {
+                const std::size_t idx = static_cast<std::size_t>(ti.lParam);
+                if (idx < selected.size()) selected[idx] = true;
+            }
+        }
+    }
+
+    const dn::DeletePlan plan = dn::plan_deletion(entries_, clusters_, selected);
+    if (plan.to_delete.empty()) {
+        SetStatus(L"Nothing to delete (protected files and the last copy of each "
+                  L"group are kept).");
+        return;
+    }
+
+    std::wstring msg = L"Delete " + std::to_wstring(plan.to_delete.size()) +
+                       L" file(s)? They will be moved to the Recycle Bin where "
+                       L"possible.\n\n";
+    for (const auto idx : plan.to_delete) msg += to_wide(entries_[idx].path.string()) + L"\n";
+    if (!plan.skipped_protected.empty())
+        msg += L"\nSkipped (protected): " + std::to_wstring(plan.skipped_protected.size()) +
+               L" file(s).";
+    if (MessageBoxW(hwnd_, msg.c_str(), L"Delete duplicates", MB_YESNO | MB_ICONWARNING) != IDYES)
+        return;
+
+    std::vector<std::wstring> paths;
+    paths.reserve(plan.to_delete.size());
+    for (const auto idx : plan.to_delete) paths.push_back(to_wide(entries_[idx].path.string()));
+
+    std::wstring error;
+    const int deleted = delete_files(paths, error);
+    RemoveDeletedItems(plan.to_delete);
+
+    std::wstring status = L"Deleted " + std::to_wstring(deleted) + L" file(s)";
+    if (!plan.kept.empty())
+        status += L"; kept " + std::to_wstring(plan.kept.size()) + L" (last copy)";
+    if (!plan.skipped_protected.empty())
+        status += L"; skipped " + std::to_wstring(plan.skipped_protected.size()) + L" protected";
+    if (!error.empty()) status += L". Errors: " + error;
+    SetStatus(status);
+}
+
+void App::RemoveDeletedItems(const std::vector<std::size_t>& deleted) {
+    const std::unordered_set<std::size_t> deleted_set(deleted.begin(), deleted.end());
+
+    // Reflect the deletion in the cluster model so later deletions apply the
+    // keep-one rule against the surviving members.
+    for (auto& cl : clusters_)
+        cl.members.erase(
+            std::remove_if(cl.members.begin(), cl.members.end(),
+                           [&](std::size_t m) { return deleted_set.count(m) != 0; }),
+            cl.members.end());
+
+    std::unordered_set<HTREEITEM> affected_parents;
+    for (const auto idx : deleted) {
+        auto it = member_items_.find(idx);
+        if (it == member_items_.end()) continue;
+        HTREEITEM parent = TreeView_GetParent(queue_, it->second);
+        TreeView_DeleteItem(queue_, it->second);
+        member_items_.erase(it);
+        if (parent) affected_parents.insert(parent);
+    }
+
+    for (HTREEITEM parent : affected_parents) {
+        int count = 0;
+        for (HTREEITEM c = TreeView_GetChild(queue_, parent); c;
+             c = TreeView_GetNextSibling(queue_, c))
+            ++count;
+        if (count == 0) {
+            TreeView_DeleteItem(queue_, parent);
+            continue;
+        }
+        TVITEMW pit{};
+        pit.hItem = parent;
+        pit.mask = TVIF_PARAM;
+        TreeView_GetItem(queue_, &pit);
+        const std::size_t ci = static_cast<std::size_t>(pit.lParam);
+        if (ci < clusters_.size()) {
+            const auto& anchor = entries_[clusters_[ci].anchor];
+            const std::wstring header = to_wide(anchor.name) + L"  (" +
+                                        std::to_wstring(count) + L")";
+            TVITEMW up{};
+            up.hItem = parent;
+            up.mask = TVIF_TEXT;
+            up.pszText = const_cast<LPWSTR>(header.c_str());
+            TreeView_SetItem(queue_, &up);
+        }
+    }
 }
 
 }  // namespace gui

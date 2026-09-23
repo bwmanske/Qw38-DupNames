@@ -32,6 +32,7 @@ add_library(dn_core
   src/blocking.cpp
   src/scanner.cpp
   src/match.cpp
+  src/deletion.cpp
   src/ini.cpp
   src/cli.cpp
 )
@@ -70,6 +71,7 @@ if(DN_TESTS)
     tests/test_acceptance.cpp
     tests/test_scanner.cpp
     tests/test_match.cpp
+    tests/test_deletion.cpp
     tests/test_ini.cpp
     tests/test_cli.cpp
   )
