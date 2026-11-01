@@ -44,6 +44,13 @@ private:
     int PopulateQueue(const std::vector<dn::Cluster>& clusters);  // returns # groups shown
     void RemoveDeletedItems(const std::vector<std::size_t>& deleted);
 
+    // Right-click context menu on the matches list.
+    void OnQueueContextMenu();  // hit-test the row and show the popup menu
+    void OnOpenFile();          // open the row's file with its default app
+    void OnOpenFolder();        // open the row's folder in Explorer (file selected)
+    void OnRenameFile();        // rename the row's file (dialog + filesystem rename)
+    std::size_t EntryIndexForRow(int row) const;  // entry index for a queue row
+
     HINSTANCE hInstance_ = nullptr;
     HWND hwnd_ = nullptr;
     HWND dirList_ = nullptr;  // SysListView32: added directories
@@ -71,6 +78,8 @@ private:
     int dir_col_widths_[2] = {600, 100};
     int queue_col_widths_[6] = {280, 290, 55, 50, 70, 130};
     std::vector<int> row_group_;       // 1-based group number per queue row (banding)
+    std::vector<bool> row_protected_;  // true if the row's file is in a protected dir
+    int context_row_ = -1;             // queue row targeted by the context menu
 };
 
 }  // namespace gui

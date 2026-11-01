@@ -64,7 +64,10 @@ Its size, position, and column widths are remembered between runs (see
   `\\server\share`), **Group** (the group number), **Size** (e.g. `1.37 GB`),
   and **File modified** (e.g. `9/9/2026 10:03:26 PM`). Rows of even group
   numbers are shaded pale blue so groups are easy to tell apart. Check the
-  files you want to delete.
+  files you want to delete. Files in **protected** directories have **no
+  checkbox** — they can never be selected for deletion. **Right-clicking any
+  row** opens a context menu: **Open File**, **Open Folder in Explorer**, and
+  **Rename** (see [Context menu](#context-menu)).
 
 ## Command line
 
@@ -232,6 +235,23 @@ member row has a checkbox. To delete duplicates:
 - Only files that are actually checked in the list are candidates for
   deletion.
 
+## Context menu
+
+Right-click any row in the **Matches** list to open a context menu with three
+entries:
+
+- **Open File** — opens the file with its default application (e.g. a video
+  player for a `.mkv`). If the file cannot be opened, the status line says so.
+- **Open Folder in Explorer** — opens the row's folder (the **Folder** column)
+  in Windows Explorer with the file itself selected, so you can examine it
+  alongside its neighbors.
+- **Rename** — opens a small dialog with the file's current name; the base
+  name (without the extension) is pre-selected so you can just type a new
+  name. The new name must not be empty, must not contain the characters
+  `\ / : * ? " < > |`, and must not already exist in the same folder. On
+  success the file is renamed in place and the row's **File Name** updates.
+  The match results for the renamed file are stale until you scan again.
+
 ## What's implemented
 
 | Area | State |
@@ -241,7 +261,9 @@ member row has a checkbox. To delete duplicates:
 | Test suite (107 test cases / 346 assertions, including all 19 spec acceptance cases) | Done, all passing |
 | Directory scanning | Done (recursive/flat, include/exclude globs, hidden skip, real-world file dates) |
 | GUI main window | Done — directory list (Path + Type columns), Scan button, match queue |
-| Match queue in the GUI | Done — flat list of MATCH groups (one row per member) with checkboxes, Drive/Group/Size/File-modified columns, and alternating per-group shading |
+| Match queue in the GUI | Done — flat list of MATCH groups (one row per member) with checkboxes (none on protected rows), Drive/Group/Size/File-modified columns, and alternating per-group shading |
+| Matches context menu | Done — right-click any row: Open File (default app), Open Folder in Explorer (file selected), Rename |
+| Rename dialog | Done — modal dialog, base name pre-selected, validated (non-empty, legal characters, no existing target), renames in place |
 | Directory type toggle | Done — click the Type cell to switch a folder between Common and Protected |
 | Command line (`--ini` / `--match` / `--close`) | Done, with INI write-back |
 | Path lists / INI persistence | Done — loaded on start, saved on exit (and on add/remove/type change); local + UNC paths |

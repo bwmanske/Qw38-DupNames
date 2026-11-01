@@ -259,11 +259,12 @@ To avoid comparing every pair:
 ## 10. Window and Dialog Mockups
 
 The v1 product is a Win32 desktop GUI (this supersedes the CLI-only scope in
-§2). There are two custom screens — the **main window** and the **Options
-dialog** — plus the system **delete-confirmation** message box and the system
-**folder browser** invoked by **Add...**. Window size, position, and column
-widths persist across runs in the INI `[Window]` section (§10.5). The mockups
-below are not to scale; they show layout and content.
+§2). There are three custom screens — the **main window**, the **Options
+dialog**, and the **rename dialog** — plus the system **delete-confirmation**
+message box, the system **folder browser** invoked by **Add...**, and the
+**matches context menu** shown on right-click (§10.1). Window size, position,
+and column widths persist across runs in the INI `[Window]` section (§10.6).
+The mockups below are not to scale; they show layout and content.
 
 ### 10.1 Main window
 
@@ -285,6 +286,7 @@ below are not to scale; they show layout and content.
 | | [ ] File Name             | Folder           | Drive | Group | Size    | |
 | | [ ] the.matrix.1999.ext.. | D:\Media\Movies  | D:    | 1     | 1.37 GB | |
 | | [x] The Matrix (1999)     | \\fileserver\sh. | \\file | 1     | 1.37 GB | |
+| |     The Matrix (1999)     | \\fileserver\ar. | \\file | 1     | 1.37 GB | |
 | | [ ] inception.2010.1080p. | E:\Downloads     | E:    | 2     | 78.4 MB | |
 | | [ ] Inception (2010)      | D:\Media\Movies  | D:    | 2     | 78.4 MB | |
 | +------------------------------------------------------------------------+ |
@@ -315,7 +317,14 @@ Elements:
   with fewer than two members are not shown. **Alternating group shading**:
   rows of even group numbers are banded pale blue (`RGB(216, 233, 244)`);
   odd groups are white — the band is per *group*, not per row, so every row
-  of a group shares one color.
+  of a group shares one color. **Protected rows have no checkbox**: files in
+  protected directories are painted without a checkbox (the checkbox cell is
+  filled with the row's band color), so they cannot be selected for deletion;
+  `plan_deletion` also skips protected entries as a backstop.
+- **Matches context menu** (right-click any row): **Open File** (opens the
+  file with its default application), **Open Folder in Explorer** (opens the
+  row's folder in Explorer with the file selected), and **Rename** (opens the
+  rename dialog, §10.5).
 - **Status line**: transient messages (`Ready.`, `Loaded N director(y/ies)
   from <path>`, `Scanning...`, `Options saved.`, scan results, deletion
   results).
@@ -413,7 +422,36 @@ classic `SHBrowseForFolder` dialog when the COM class is not registered. The
 chosen folder is appended to the directory list as a Common path and saved to
 the INI immediately.
 
-### 10.5 Window and layout persistence
+### 10.5 Rename dialog
+
+Invoked from the matches context menu's **Rename** entry (§10.1). A modal
+dialog, centered over the main window, with a single edit box pre-filled with
+the file's current name — the base name (without the extension) is
+pre-selected, so a typical rename only edits the name and leaves the
+extension in place:
+
+```
++--------------------------------------------------------------+
+| Rename file                                                [x]|
++--------------------------------------------------------------+
+| New file name:                                               |
+| [the.matrix.1999.extended.1080p.x264.mkv              ]      |
+|                                    [OK] [Cancel]             |
++--------------------------------------------------------------+
+```
+
+Behavior:
+
+- **OK** validates the new name: it must be non-empty, contain no characters
+  illegal in a file name (`\ / : * ? " < > |`), and no file with that name may
+  already exist in the same folder. A violation reports a status message
+  (`Rename cancelled: ...`) and the file is not renamed.
+- On success the file is renamed in place (same folder) and the row's
+  **File Name** cell is updated; the status line reports `Renamed to <name>.`
+  The match results are stale for the renamed file until the next scan.
+- **Cancel** (or closing the window) discards the change.
+
+### 10.6 Window and layout persistence
 
 The main window's size, position, and column widths persist in the INI
 `[Window]` section, written on exit (and on add/remove/type changes) and read

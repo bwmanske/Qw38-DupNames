@@ -25,6 +25,7 @@
 #include "dn/scanner.hpp"
 
 #include "options.hpp"
+#include "rename.hpp"
 
 namespace gui {
 
@@ -39,6 +40,10 @@ constexpr INT_PTR kIdDelete = 1008;
 constexpr INT_PTR kIdDirList = 1004;
 constexpr INT_PTR kIdQueue = 1005;
 constexpr INT_PTR kIdStatus = 1006;
+// Matches-list right-click context menu.
+constexpr INT_PTR kIdCtxOpenFile = 2001;
+constexpr INT_PTR kIdCtxOpenFolder = 2002;
+constexpr INT_PTR kIdCtxRename = 2003;
 
 // CLSID_FileOpenDialog (avoids relying on the SDK exporting the CLSID symbol).
 const GUID kClsidFileOpenDialog = {0x43826d1e, 0xe718, 0x42ee,
@@ -52,6 +57,17 @@ std::wstring to_wide(const std::string& s) {
     const int n = MultiByteToWideChar(CP_ACP, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0);
     std::wstring out(static_cast<size_t>(n), L'\0');
     MultiByteToWideChar(CP_ACP, 0, s.c_str(), static_cast<int>(s.size()), out.data(), n);
+    return out;
+}
+
+// Inverse of to_wide: wide -> native-narrow (CP_ACP).
+std::string to_narrow(const std::wstring& s) {
+    if (s.empty()) return {};
+    const int n = WideCharToMultiByte(CP_ACP, 0, s.c_str(), static_cast<int>(s.size()),
+                                      nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_ACP, 0, s.c_str(), static_cast<int>(s.size()),
+                        out.data(), n, nullptr, nullptr);
     return out;
 }
 
@@ -250,6 +266,10 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_COMMAND: {
             const int id = LOWORD(wp);
+            // Context-menu commands arrive with a 0 notification code.
+            if (id == kIdCtxOpenFile) { OnOpenFile(); return 0; }
+            if (id == kIdCtxOpenFolder) { OnOpenFolder(); return 0; }
+            if (id == kIdCtxRename) { OnRenameFile(); return 0; }
             if (HIWORD(wp) == BN_CLICKED) {
                 if (id == kIdAdd) OnAddFolder();
                 else if (id == kIdRemove) OnRemoveFolder();
@@ -261,22 +281,50 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_NOTIFY: {
             const NMHDR* nm = reinterpret_cast<const NMHDR*>(lp);
-            // Alternating per-group shading in the matches list: even group
-            // numbers get a pale blue band (matching the reference UI).
+            // Matches list custom draw: (1) alternating per-group shading —
+            // even group numbers get a pale blue band (matching the reference
+            // UI); (2) hide the checkbox on protected rows by painting the
+            // checkbox cell with the row's background color, so protected files
+            // cannot be selected for deletion.
             if (nm->hwndFrom == queue_ && nm->code == NM_CUSTOMDRAW) {
                 NMLVCUSTOMDRAW* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(lp);
                 if (cd->nmcd.dwDrawStage == CDDS_PREPAINT)
                     return CDRF_NOTIFYITEMDRAW;
+                const int row = static_cast<int>(cd->nmcd.dwItemSpec);
+                const bool validRow =
+                    row >= 0 && row < static_cast<int>(row_group_.size());
                 if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-                    const int row = static_cast<int>(cd->nmcd.dwItemSpec);
-                    if (row >= 0 && row < static_cast<int>(row_group_.size()) &&
-                        row_group_[row] % 2 == 0) {
+                    if (validRow && row_group_[row] % 2 == 0) {
                         cd->clrTextBk = RGB(216, 233, 244);
                         return CDRF_NEWFONT;  // apply the new background color
                     }
+                    return CDRF_DODEFAULT;
+                }
+                if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT) {
+                    if (validRow && row < static_cast<int>(row_protected_.size()) &&
+                        row_protected_[row]) {
+                        const COLORREF bg =
+                            (row_group_[row] % 2 == 0) ? RGB(216, 233, 244) : RGB(255, 255, 255);
+                        RECT r{};
+                        ListView_GetItemRect(queue_, row, &r, LVIR_BOUNDS);
+                        // Width of the checkbox cell (the box plus its left
+                        // margin), scaled to the control's DPI. The first
+                        // column's text starts just past this, so painting it
+                        // covers the checkbox without touching the text.
+                        const int dpi = GetDeviceCaps(cd->nmcd.hdc, LOGPIXELSX);
+                        const int cellW = MulDiv(16, dpi, 96);
+                        RECT cover{r.left, r.top, r.left + cellW, r.bottom};
+                        HBRUSH br = CreateSolidBrush(bg);
+                        FillRect(cd->nmcd.hdc, &cover, br);
+                        DeleteObject(br);
+                    }
+                    return CDRF_DODEFAULT;
                 }
                 return CDRF_DODEFAULT;
             }
+            // Right-click on a matches row: show the context menu.
+            if (nm->hwndFrom == queue_ && nm->code == NM_RCLICK)
+                OnQueueContextMenu();
             // Clicking the "Type" column of a directory row toggles
             // Common <-> Protected (the user's preferred way to change type).
             if (nm->hwndFrom == dirList_ && nm->code == NM_CLICK) {
@@ -601,6 +649,7 @@ void App::OnScan() {
 int App::PopulateQueue(const std::vector<dn::Cluster>& clusters) {
     ListView_DeleteAllItems(queue_);
     row_group_.clear();
+    row_protected_.clear();
     int row = 0;
     int groupsShown = 0;
     for (std::size_t ci = 0; ci < clusters.size(); ++ci) {
@@ -627,6 +676,7 @@ int App::PopulateQueue(const std::vector<dn::Cluster>& clusters) {
             if (ListView_InsertItem(queue_, &item) < 0)
                 continue;
             row_group_.push_back(static_cast<int>(ci + 1));  // for group banding
+            row_protected_.push_back(e.protected_);          // for checkbox hiding
             ListView_SetItemText(queue_, row, 1, const_cast<LPWSTR>(folder.c_str()));
             ListView_SetItemText(queue_, row, 2, const_cast<LPWSTR>(drive.c_str()));
             ListView_SetItemText(queue_, row, 3, const_cast<LPWSTR>(group.c_str()));
@@ -709,6 +759,120 @@ void App::RemoveDeletedItems(const std::vector<std::size_t>& deleted) {
     // Re-populate the list view: groups that lost all but one member (or all
     // members) are skipped, and the remaining rows keep their group numbers.
     PopulateQueue(clusters_);
+}
+
+std::size_t App::EntryIndexForRow(int row) const {
+    // Returns the entries_ index stored in the row's lParam, or entries_.size()
+    // as an invalid sentinel when the row is out of range or has no entry.
+    if (row < 0 || row >= ListView_GetItemCount(queue_)) return entries_.size();
+    LVITEMW item{};
+    item.mask = LVIF_PARAM;
+    item.iItem = row;
+    if (!ListView_GetItem(queue_, &item)) return entries_.size();
+    const std::size_t idx = static_cast<std::size_t>(item.lParam);
+    return idx < entries_.size() ? idx : entries_.size();
+}
+
+void App::OnQueueContextMenu() {
+    if (ListView_GetItemCount(queue_) == 0) return;
+
+    // Hit-test the row under the cursor (screen -> client coordinates).
+    POINT pt{};
+    GetCursorPos(&pt);
+    POINT client{pt.x, pt.y};
+    ScreenToClient(queue_, &client);
+    LVHITTESTINFO ht{};
+    ht.pt = client;
+    const int row = ListView_SubItemHitTest(queue_, &ht);
+    if (row < 0) return;
+    context_row_ = row;
+
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return;
+    AppendMenuW(menu, MF_STRING, kIdCtxOpenFile, L"Open File");
+    AppendMenuW(menu, MF_STRING, kIdCtxOpenFolder, L"Open Folder in Explorer");
+    AppendMenuW(menu, MF_STRING, kIdCtxRename, L"Rename");
+    // TPM_RIGHTBUTTON: the menu was opened by a right-click, so it dismisses
+    // when the right button is released.
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd_, nullptr);
+    DestroyMenu(menu);
+}
+
+void App::OnOpenFile() {
+    const std::size_t idx = EntryIndexForRow(context_row_);
+    if (idx >= entries_.size()) return;
+    const std::wstring path = to_wide(entries_[idx].path.string());
+    // ShellExecuteW returns an HINSTANCE > 32 on success, an error code <= 32
+    // on failure (e.g. 2 = file not found, 3 = access denied).
+    HINSTANCE res = ShellExecuteW(hwnd_, L"open", path.c_str(), nullptr, nullptr,
+                                  SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(res) <= 32)
+        SetStatus(L"Could not open " + path + L".");
+    else
+        SetStatus(L"Opened " + path + L".");
+}
+
+void App::OnOpenFolder() {
+    const std::size_t idx = EntryIndexForRow(context_row_);
+    if (idx >= entries_.size()) return;
+    const std::wstring path = to_wide(entries_[idx].path.string());
+    // Open the file's folder in Explorer with the file itself selected, so it
+    // can be examined at a glance.
+    const std::wstring args = L"/select,\"" + path + L"\"";
+    HINSTANCE res = ShellExecuteW(hwnd_, L"open", L"explorer.exe", args.c_str(),
+                                  nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(res) <= 32)
+        SetStatus(L"Could not open the folder in Explorer.");
+    else
+        SetStatus(L"Opened the folder in Explorer.");
+}
+
+void App::OnRenameFile() {
+    const std::size_t idx = EntryIndexForRow(context_row_);
+    if (idx >= entries_.size()) return;
+    const std::wstring current = to_wide(entries_[idx].name);
+
+    std::wstring new_name;
+    if (!show_rename_dialog(hwnd_, hInstance_, current, new_name))
+        return;  // user cancelled
+
+    // Validate the new name: non-empty, no characters illegal in a file name.
+    if (new_name.empty()) {
+        SetStatus(L"Rename cancelled: the file name is empty.");
+        return;
+    }
+    static const wchar_t kInvalid[] = L"\\/:*?\"<>|";
+    for (const wchar_t c : new_name) {
+        if (wcschr(kInvalid, c) != nullptr) {
+            SetStatus(L"Rename cancelled: the file name contains invalid characters.");
+            return;
+        }
+    }
+
+    const std::wstring target =
+        to_wide(entries_[idx].path.parent_path().string()) + L"\\" + new_name;
+    std::error_code ec;
+    if (std::filesystem::exists(target, ec)) {
+        SetStatus(L"Rename cancelled: " + new_name + L" already exists in that folder.");
+        return;
+    }
+
+    std::filesystem::rename(entries_[idx].path, target, ec);  // void + error_code
+    if (ec) {
+        SetStatus(L"Rename failed: " + to_wide(ec.message()));
+        return;
+    }
+
+    // Update the model and the row's File Name cell. The match results are now
+    // stale for this file until the next scan.
+    entries_[idx].path = target;
+    entries_[idx].name = to_narrow(new_name);
+    LVITEMW item{};
+    item.mask = LVIF_TEXT;
+    item.iItem = context_row_;
+    item.pszText = const_cast<LPWSTR>(new_name.c_str());
+    ListView_SetItem(queue_, &item);
+    SetStatus(L"Renamed to " + new_name + L".");
 }
 
 }  // namespace gui

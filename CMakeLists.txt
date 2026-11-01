@@ -51,6 +51,7 @@ add_executable(DupNames WIN32
   src/main.cpp
   src/gui/app.cpp
   src/gui/options.cpp
+  src/gui/rename.cpp
 )
 target_link_libraries(DupNames PRIVATE dn_core comctl32 gdiplus shell32 ole32)
 # MinGW/GCC: the app's entry point is wWinMain (wide), so select the wide-char
