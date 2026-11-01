@@ -4,11 +4,15 @@
 
 #include <objbase.h>
 #include <shobjidl.h>
+#include <shlobj.h>
 #include <shellapi.h>
 #include <commctrl.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <cwchar>
 #include <filesystem>
+#include <iterator>
 #include <string>
 #include <system_error>
 #include <unordered_set>
@@ -21,10 +25,6 @@
 #include "dn/scanner.hpp"
 
 #include "options.hpp"
-
-#ifndef TVIS_CHECKED
-#define TVIS_CHECKED 0x00000004
-#endif
 
 namespace gui {
 
@@ -39,17 +39,19 @@ constexpr INT_PTR kIdDelete = 1008;
 constexpr INT_PTR kIdDirList = 1004;
 constexpr INT_PTR kIdQueue = 1005;
 constexpr INT_PTR kIdStatus = 1006;
-constexpr int kTopPanelH = 180;  // height of the directory panel
 
 // CLSID_FileOpenDialog (avoids relying on the SDK exporting the CLSID symbol).
 const GUID kClsidFileOpenDialog = {0x43826d1e, 0xe718, 0x42ee,
                                    {0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b, 0xfe}};
 
+// Convert a native-narrow string to wide. std::filesystem::path::string() and
+// the scanner's FileEntry::name use the system ANSI code page (not UTF-8), so
+// CP_ACP is the correct source code page for a lossless round-trip.
 std::wstring to_wide(const std::string& s) {
     if (s.empty()) return {};
-    const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0);
+    const int n = MultiByteToWideChar(CP_ACP, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0);
     std::wstring out(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), out.data(), n);
+    MultiByteToWideChar(CP_ACP, 0, s.c_str(), static_cast<int>(s.size()), out.data(), n);
     return out;
 }
 
@@ -61,12 +63,80 @@ void insert_dir_item(HWND list, int index, const std::wstring& text) {
     ListView_InsertItem(list, &item);
 }
 
-HTREEITEM insert_tree_item(HWND tree, HTREEITEM parent, const std::wstring& text) {
-    TVITEMW item{};
-    item.mask = TVIF_TEXT;
-    item.hItem = parent;  // TVI_ROOT for a top-level item, else the parent item
-    item.pszText = const_cast<LPWSTR>(text.c_str());
-    return TreeView_InsertItem(tree, &item);
+// Format a byte count with three significant figures, e.g. "1.37 GB",
+// "78.4 MB", "110 MB", "512 B" (matches the reference UI).
+std::wstring format_size(std::uintmax_t bytes) {
+    static const wchar_t* kUnits[] = {L"B", L"KB", L"MB", L"GB", L"TB"};
+    if (bytes < 1024)
+        return std::to_wstring(bytes) + L" B";
+    double value = static_cast<double>(bytes);
+    int unit = 0;
+    while (value >= 1024.0 && unit < 4) {
+        value /= 1024.0;
+        ++unit;
+    }
+    wchar_t buf[40];
+    if (value < 10.0)
+        swprintf(buf, 39, L"%.2f %s", value, kUnits[unit]);
+    else if (value < 100.0)
+        swprintf(buf, 39, L"%.1f %s", value, kUnits[unit]);
+    else
+        swprintf(buf, 39, L"%.0f %s", value, kUnits[unit]);
+    return buf;
+}
+
+// Format epoch seconds as the user's locale short date + long time
+// (e.g. "9/9/2026 10:03:26 PM"); 0/unknown yields "unknown".
+std::wstring format_epoch(std::int64_t epoch) {
+    if (epoch <= 0) return L"unknown";
+    // FILETIME is 100-ns intervals since 1601-01-01; the Unix epoch offset is
+    // 11644473600 seconds.
+    const std::uint64_t ft100 =
+        static_cast<std::uint64_t>(epoch) * 10000000ULL + 116444736000000000ULL;
+    FILETIME ft{};
+    ft.dwLowDateTime = static_cast<DWORD>(ft100 & 0xFFFFFFFFu);
+    ft.dwHighDateTime = static_cast<DWORD>(ft100 >> 32);
+    SYSTEMTIME st{};
+    if (!FileTimeToSystemTime(&ft, &st)) return L"unknown";
+    wchar_t date[64]{};
+    wchar_t time[64]{};
+    if (GetDateFormatW(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &st, nullptr, date, 64) == 0)
+        return L"unknown";
+    // A null format + flags 0 yields the locale's default time picture, which
+    // for en-US is "h:mm:ss tt" (e.g. "10:03:26 PM") — matching the reference
+    // UI. (The old TIME_LONGTIME flag value no longer exists in current SDKs.)
+    if (GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, nullptr, time, 64) == 0)
+        return L"unknown";
+    return std::wstring(date) + L" " + time;
+}
+
+// Drive label for a path: "H:" for a drive letter, "\\server\share" for UNC.
+std::wstring drive_of(const std::wstring& path) {
+    if (path.size() >= 2 && path[1] == L':')
+        return path.substr(0, 2);
+    if (path.size() >= 2 && path[0] == L'\\' && path[1] == L'\\') {
+        std::wstring out = L"\\\\";
+        int parts = 0;
+        for (std::size_t i = 2; i < path.size() && parts < 2; ++i) {
+            out += path[i];
+            if (path[i] == L'\\') ++parts;
+        }
+        return out;
+    }
+    return L"";
+}
+
+// True if `r` overlaps the virtual screen (all monitors) by at least 100x100
+// px. Guards against restoring a window saved on a now-disconnected monitor.
+bool rect_on_screen(const RECT& r) {
+    RECT vs{};
+    vs.left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    vs.top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    vs.right = vs.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    vs.bottom = vs.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    const int overlapW = std::min(r.right, vs.right) - std::max(r.left, vs.left);
+    const int overlapH = std::min(r.bottom, vs.bottom) - std::max(r.top, vs.top);
+    return overlapW >= 100 && overlapH >= 100;
 }
 
 // Delete the given files. Local files go to the Recycle Bin (recoverable);
@@ -126,9 +196,18 @@ int App::Run(int nCmdShow) {
         return 1;
     }
 
+    LoadWindowLayout();  // restore [Window] rect + column widths from the INI
+
+    int x = CW_USEDEFAULT, y = CW_USEDEFAULT, w = 900, h = 640;
+    if (have_window_rect_) {
+        x = window_rect_.left;
+        y = window_rect_.top;
+        w = window_rect_.right - window_rect_.left;
+        h = window_rect_.bottom - window_rect_.top;
+    }
     hwnd_ = CreateWindowExW(
         0, kClass, L"DupNames", WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 900, 640,
+        x, y, w, h,
         nullptr, nullptr, hInstance_, this);
     if (!hwnd_) {
         CoUninitialize();
@@ -141,7 +220,7 @@ int App::Run(int nCmdShow) {
     Layout(rc.right - rc.left, rc.bottom - rc.top);
     LoadState();
 
-    ShowWindow(hwnd_, nCmdShow);
+    ShowWindow(hwnd_, restore_maximized_ ? SW_SHOWMAXIMIZED : nCmdShow);
     UpdateWindow(hwnd_);
 
     MSG msg{};
@@ -180,11 +259,50 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        case WM_NOTIFY: {
+            const NMHDR* nm = reinterpret_cast<const NMHDR*>(lp);
+            // Alternating per-group shading in the matches list: even group
+            // numbers get a pale blue band (matching the reference UI).
+            if (nm->hwndFrom == queue_ && nm->code == NM_CUSTOMDRAW) {
+                NMLVCUSTOMDRAW* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(lp);
+                if (cd->nmcd.dwDrawStage == CDDS_PREPAINT)
+                    return CDRF_NOTIFYITEMDRAW;
+                if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+                    const int row = static_cast<int>(cd->nmcd.dwItemSpec);
+                    if (row >= 0 && row < static_cast<int>(row_group_.size()) &&
+                        row_group_[row] % 2 == 0) {
+                        cd->clrTextBk = RGB(216, 233, 244);
+                        return CDRF_NEWFONT;  // apply the new background color
+                    }
+                }
+                return CDRF_DODEFAULT;
+            }
+            // Clicking the "Type" column of a directory row toggles
+            // Common <-> Protected (the user's preferred way to change type).
+            if (nm->hwndFrom == dirList_ && nm->code == NM_CLICK) {
+                // Resolve which column was clicked. Use the cursor position
+                // (reliable at click time) converted to list-view client coords.
+                POINT pt{};
+                GetCursorPos(&pt);
+                ScreenToClient(dirList_, &pt);
+                LVHITTESTINFO hti{};
+                hti.pt = pt;
+                ListView_SubItemHitTest(dirList_, &hti);
+                if (hti.iItem >= 0 && hti.iSubItem == 1)
+                    OnDirTypeToggle(hti.iItem);
+            }
+            return 0;
+        }
         case WM_SIZE:
             Layout(LOWORD(lp), HIWORD(lp));
             return 0;
-        case WM_DESTROY:
+        case WM_CLOSE:
+            // Save while the child list views are still alive: Windows destroys
+            // children before sending WM_DESTROY, so the column-width reads in
+            // SaveWindowLayout must happen here, not in WM_DESTROY.
             SaveState();
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
         default:
@@ -206,6 +324,15 @@ void App::CreateControls() {
     col.pszText = const_cast<LPWSTR>(L"Path");
     col.cx = 600;
     ListView_InsertColumn(dirList_, 0, &col);
+    LVCOLUMNW colType{};
+    colType.mask = LVCF_TEXT | LVCF_WIDTH;
+    colType.pszText = const_cast<LPWSTR>(L"Type");
+    colType.cx = 100;
+    ListView_InsertColumn(dirList_, 1, &colType);
+    // Restore persisted column widths (LoadWindowLayout ran before window
+    // creation, so these hold the INI values or the defaults above).
+    for (int i = 0; i < 2; ++i)
+        ListView_SetColumnWidth(dirList_, i, dir_col_widths_[i]);
 
     addBtn_ = CreateWindowExW(0, L"BUTTON", L"Add...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                               8, 150, 80, 24, hwnd_, reinterpret_cast<HMENU>(kIdAdd),
@@ -223,14 +350,32 @@ void App::CreateControls() {
                                   788, 150, 82, 24, hwnd_, reinterpret_cast<HMENU>(kIdDelete),
                                   hInstance_, nullptr);
 
-    CreateWindowExW(0, L"STATIC", L"Matches:", WS_CHILD | WS_VISIBLE,
-                    8, 188, 200, 16, hwnd_, nullptr, hInstance_, nullptr);
+    matchesLabel_ = CreateWindowExW(0, L"STATIC", L"Matches:", WS_CHILD | WS_VISIBLE,
+                                    8, 188, 200, 16, hwnd_, nullptr, hInstance_, nullptr);
 
-    queue_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
-                              WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_HASBUTTONS |
-                                  TVS_SHOWSELALWAYS | TVS_CHECKBOXES,
+    // Flat list view of match clusters: one row per cluster member, with a
+    // checkbox per row. (A tree view was used here originally, but inserts
+    // failed in the user's session; the list view works and matches the
+    // reference UI.)
+    queue_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+                              WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS,
                               8, 208, 400, 300, hwnd_, reinterpret_cast<HMENU>(kIdQueue),
                               hInstance_, nullptr);
+    ListView_SetExtendedListViewStyle(queue_, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
+    const struct { const wchar_t* text; int width; } kCols[] = {
+        {L"File Name", 280}, {L"Folder", 290}, {L"Drive", 55},
+        {L"Group", 50}, {L"Size", 70}, {L"File modified", 130},
+    };
+    for (int i = 0; i < static_cast<int>(std::size(kCols)); ++i) {
+        LVCOLUMNW qcol{};
+        qcol.mask = LVCF_TEXT | LVCF_WIDTH;
+        qcol.pszText = const_cast<LPWSTR>(kCols[i].text);
+        qcol.cx = kCols[i].width;
+        ListView_InsertColumn(queue_, i, &qcol);
+    }
+    // Restore persisted column widths (see the dirList_ restore above).
+    for (int i = 0; i < static_cast<int>(std::size(kCols)); ++i)
+        ListView_SetColumnWidth(queue_, i, queue_col_widths_[i]);
 
     status_ = CreateWindowExW(0, L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE | SS_LEFT,
                                8, 600, 400, 18, hwnd_, reinterpret_cast<HMENU>(kIdStatus),
@@ -250,6 +395,73 @@ void App::LoadState() {
 void App::SaveState() {
     dn::ini_save_paths(ini_path_, dirs_);
     dn::ini_save_state(ini_path_, config_);
+    SaveWindowLayout();
+}
+
+void App::LoadWindowLayout() {
+    // Window rect: only restore if all four keys are present and the rect is
+    // sane (big enough and at least partly on a connected monitor).
+    if (dn::ini_has_key(ini_path_, L"Window", L"X") &&
+        dn::ini_has_key(ini_path_, L"Window", L"Y") &&
+        dn::ini_has_key(ini_path_, L"Window", L"W") &&
+        dn::ini_has_key(ini_path_, L"Window", L"H")) {
+        RECT r{};
+        r.left = dn::ini_get_int(ini_path_, L"Window", L"X", 0);
+        r.top = dn::ini_get_int(ini_path_, L"Window", L"Y", 0);
+        r.right = r.left + dn::ini_get_int(ini_path_, L"Window", L"W", 900);
+        r.bottom = r.top + dn::ini_get_int(ini_path_, L"Window", L"H", 640);
+        const int w = r.right - r.left;
+        const int h = r.bottom - r.top;
+        if (w >= 320 && h >= 200 && rect_on_screen(r)) {
+            window_rect_ = r;
+            have_window_rect_ = true;
+        }
+    }
+    restore_maximized_ = dn::ini_get_bool(ini_path_, L"Window", L"Maximized", false);
+
+    // Column widths: a key present with a sane value overrides the default.
+    for (int i = 0; i < 2; ++i) {
+        const std::wstring key = L"DirCol" + std::to_wstring(i);
+        if (dn::ini_has_key(ini_path_, L"Window", key)) {
+            const int cw = dn::ini_get_int(ini_path_, L"Window", key, 0);
+            if (cw >= 20) dir_col_widths_[i] = cw;
+        }
+    }
+    for (int i = 0; i < 6; ++i) {
+        const std::wstring key = L"QueueCol" + std::to_wstring(i);
+        if (dn::ini_has_key(ini_path_, L"Window", key)) {
+            const int cw = dn::ini_get_int(ini_path_, L"Window", key, 0);
+            if (cw >= 20) queue_col_widths_[i] = cw;
+        }
+    }
+}
+
+void App::SaveWindowLayout() {
+    if (!hwnd_) return;
+    // Save the *normal* (restored) position, not the maximized one, plus a
+    // flag so the window reopens maximized if it was.
+    WINDOWPLACEMENT wp{};
+    wp.length = sizeof(wp);
+    if (GetWindowPlacement(hwnd_, &wp)) {
+        dn::ini_set_int(ini_path_, L"Window", L"X", wp.rcNormalPosition.left);
+        dn::ini_set_int(ini_path_, L"Window", L"Y", wp.rcNormalPosition.top);
+        dn::ini_set_int(ini_path_, L"Window", L"W",
+                        wp.rcNormalPosition.right - wp.rcNormalPosition.left);
+        dn::ini_set_int(ini_path_, L"Window", L"H",
+                        wp.rcNormalPosition.bottom - wp.rcNormalPosition.top);
+        dn::ini_set_bool(ini_path_, L"Window", L"Maximized",
+                         wp.showCmd == SW_SHOWMAXIMIZED);
+    }
+    for (int i = 0; i < 2; ++i) {
+        const int cw = ListView_GetColumnWidth(dirList_, i);
+        if (cw > 0)
+            dn::ini_set_int(ini_path_, L"Window", L"DirCol" + std::to_wstring(i), cw);
+    }
+    for (int i = 0; i < 6; ++i) {
+        const int cw = ListView_GetColumnWidth(queue_, i);
+        if (cw > 0)
+            dn::ini_set_int(ini_path_, L"Window", L"QueueCol" + std::to_wstring(i), cw);
+    }
 }
 
 void App::OnOptions() {
@@ -261,51 +473,79 @@ void App::OnOptions() {
 
 void App::Layout(int w, int h) {
     if (w < 100 || h < 100) return;
-    const int queueTop = kTopPanelH + 28;
+    const int margin = 8;
+    const int btnH = 24;
     const int statusH = 24;
-    MoveWindow(dirList_, 8, 28, w - 16, kTopPanelH - 40, TRUE);
-    MoveWindow(addBtn_, 8, kTopPanelH - 30, 80, 24, TRUE);
-    MoveWindow(removeBtn_, 94, kTopPanelH - 30, 80, 24, TRUE);
-    MoveWindow(optionsBtn_, w - 270, kTopPanelH - 30, 82, 24, TRUE);
-    MoveWindow(scanBtn_, w - 180, kTopPanelH - 30, 82, 24, TRUE);
-    MoveWindow(deleteBtn_, w - 90, kTopPanelH - 30, 82, 24, TRUE);
-    MoveWindow(queue_, 8, queueTop, w - 16, h - queueTop - statusH, TRUE);
-    MoveWindow(status_, 8, h - statusH, w - 16, statusH - 6, TRUE);
+
+    // Directory listview, with the button row below it (no overlap).
+    const int listTop = 28;
+    const int listH = 134;
+    MoveWindow(dirList_, margin, listTop, w - 2 * margin, listH, TRUE);
+
+    const int btnY = listTop + listH + 4;  // 166: 4px below the listview
+    MoveWindow(addBtn_, margin, btnY, 80, btnH, TRUE);
+    MoveWindow(removeBtn_, margin + 86, btnY, 80, btnH, TRUE);
+    MoveWindow(optionsBtn_, w - 270, btnY, 82, btnH, TRUE);
+    MoveWindow(scanBtn_, w - 180, btnY, 82, btnH, TRUE);
+    MoveWindow(deleteBtn_, w - 90, btnY, 82, btnH, TRUE);
+
+    // "Matches:" label and queue below the button row.
+    const int labelTop = 204;
+    MoveWindow(matchesLabel_, margin, labelTop, 200, 16, TRUE);
+    const int queueTop = labelTop + 16 + 4;  // 224
+    MoveWindow(queue_, margin, queueTop, w - 2 * margin, h - queueTop - statusH, TRUE);
+
+    MoveWindow(status_, margin, h - statusH, w - 2 * margin, statusH - 6, TRUE);
+}
+
+void App::AddDir(const std::filesystem::path& p) {
+    for (const auto& d : dirs_)
+        if (d.path == p)
+            return;  // already listed
+    dirs_.push_back(dn::DirEntry{p, false});
+    RefreshDirList();
+    SaveState();  // persist immediately, not only on exit
 }
 
 void App::OnAddFolder() {
     IFileDialog* dlg = nullptr;
-    if (FAILED(CoCreateInstance(kClsidFileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
-                                IID_PPV_ARGS(&dlg))))
-        return;
+    if (SUCCEEDED(CoCreateInstance(kClsidFileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARGS(&dlg)))) {
+        DWORD opts = 0;
+        dlg->GetOptions(&opts);
+        dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+        dlg->SetTitle(L"Select a directory to scan");
 
-    DWORD opts = 0;
-    dlg->GetOptions(&opts);
-    dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-    dlg->SetTitle(L"Select a directory to scan");
-
-    if (SUCCEEDED(dlg->Show(hwnd_))) {
-        IShellItem* item = nullptr;
-        if (SUCCEEDED(dlg->GetResult(&item))) {
-            PWSTR path = nullptr;
-            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
-                const std::filesystem::path p(path);
-                bool exists = false;
-                for (const auto& d : dirs_)
-                    if (d.path == p) {
-                        exists = true;
-                        break;
-                    }
-                if (!exists) {
-                    dirs_.push_back(dn::DirEntry{p, false});
-                    RefreshDirList();
+        if (SUCCEEDED(dlg->Show(hwnd_))) {
+            IShellItem* item = nullptr;
+            if (SUCCEEDED(dlg->GetResult(&item))) {
+                PWSTR path = nullptr;
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+                    AddDir(std::filesystem::path(path));
+                    CoTaskMemFree(path);
                 }
-                CoTaskMemFree(path);
+                item->Release();
             }
-            item->Release();
         }
+        dlg->Release();
+        return;
     }
-    dlg->Release();
+
+    // Fallback: the modern IFileDialog COM class is not registered on this
+    // machine (CoCreateInstance -> REGDB_E_CLASSNOTREG). Use the classic
+    // folder browser, which is provided by Shell.Application and is available.
+    BROWSEINFOW bi{};
+    bi.hwndOwner = hwnd_;
+    bi.lpszTitle = L"Select a directory to scan";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+    if (pidl == nullptr)
+        return;  // user cancelled
+    wchar_t path[MAX_PATH]{};
+    const BOOL got = SHGetPathFromIDListW(pidl, path);
+    CoTaskMemFree(pidl);
+    if (got != FALSE)
+        AddDir(std::filesystem::path(path));
 }
 
 void App::OnRemoveFolder() {
@@ -313,15 +553,27 @@ void App::OnRemoveFolder() {
     if (sel < 0) return;
     dirs_.erase(dirs_.begin() + sel);
     RefreshDirList();
+    SaveState();  // persist immediately, not only on exit
+}
+
+void App::OnDirTypeToggle(int index) {
+    if (index < 0 || index >= static_cast<int>(dirs_.size())) return;
+    dirs_[index].protected_ = !dirs_[index].protected_;
+    RefreshDirList();
+    SaveState();  // persist immediately, not only on exit
+    const std::wstring typeStr = dirs_[index].protected_ ? L"Protected" : L"Common";
+    SetStatus(L"Type set to " + typeStr + L".");
 }
 
 void App::RefreshDirList() {
     ListView_DeleteAllItems(dirList_);
     for (std::size_t i = 0; i < dirs_.size(); ++i) {
         const auto& d = dirs_[i];
-        const std::wstring label = to_wide(d.path.string()) +
-                                   (d.protected_ ? L"  [protected]" : L"");
-        insert_dir_item(dirList_, static_cast<int>(i), label);
+        const std::wstring path = to_wide(d.path.string());
+        insert_dir_item(dirList_, static_cast<int>(i), path);
+        const std::wstring type = d.protected_ ? L"Protected" : L"Common";
+        ListView_SetItemText(dirList_, static_cast<int>(i), 1,
+                             const_cast<LPWSTR>(type.c_str()));
     }
 }
 
@@ -340,40 +592,50 @@ void App::OnScan() {
 
     entries_ = dn::scan(dirs_, config_, {});
     clusters_ = dn::match(entries_, config_);
-    PopulateQueue(clusters_);
+    const int shown = PopulateQueue(clusters_);
 
     SetStatus(L"Scanned " + std::to_wstring(entries_.size()) + L" file(s); " +
-              std::to_wstring(clusters_.size()) + L" match group(s).");
+              std::to_wstring(shown) + L" match group(s)");
 }
 
-void App::PopulateQueue(const std::vector<dn::Cluster>& clusters) {
-    TreeView_DeleteAllItems(queue_);
-    member_items_.clear();
+int App::PopulateQueue(const std::vector<dn::Cluster>& clusters) {
+    ListView_DeleteAllItems(queue_);
+    row_group_.clear();
+    int row = 0;
+    int groupsShown = 0;
     for (std::size_t ci = 0; ci < clusters.size(); ++ci) {
         const auto& cl = clusters[ci];
-        const auto& anchor = entries_[cl.anchor];
-        const std::wstring header = to_wide(anchor.name) + L"  (" +
-                                    std::to_wstring(cl.members.size()) + L")";
-        HTREEITEM parent = insert_tree_item(queue_, TVI_ROOT, header);
-        TVITEMW pit{};
-        pit.hItem = parent;
-        pit.mask = TVIF_PARAM;
-        pit.lParam = static_cast<LPARAM>(ci);  // cluster index
-        TreeView_SetItem(queue_, &pit);
+        if (cl.members.size() < 2) continue;  // a lone file is not a duplicate group
+        ++groupsShown;
+        // Group number is the stable 1-based cluster index; it does not change
+        // when members are deleted (only a rescan renumbers).
+        const std::wstring group = std::to_wstring(ci + 1);
         for (const auto idx : cl.members) {
             const auto& e = entries_[idx];
-            const std::wstring child = to_wide(e.name) + L"  -  " +
-                                       to_wide(e.path.parent_path().string());
-            HTREEITEM item = insert_tree_item(queue_, parent, child);
-            TVITEMW cit{};
-            cit.hItem = item;
-            cit.mask = TVIF_PARAM;
-            cit.lParam = static_cast<LPARAM>(idx);  // entry index
-            TreeView_SetItem(queue_, &cit);
-            member_items_[idx] = item;
+            const std::wstring name = to_wide(e.name);
+            const std::wstring folder = to_wide(e.path.parent_path().string());
+            const std::wstring path = to_wide(e.path.string());
+            const std::wstring drive = drive_of(path);
+            const std::wstring size = format_size(e.size);
+            const std::wstring modified = format_epoch(e.lastModified);
+
+            LVITEMW item{};
+            item.mask = LVIF_TEXT | LVIF_PARAM;
+            item.iItem = row;
+            item.pszText = const_cast<LPWSTR>(name.c_str());
+            item.lParam = static_cast<LPARAM>(idx);  // entry index
+            if (ListView_InsertItem(queue_, &item) < 0)
+                continue;
+            row_group_.push_back(static_cast<int>(ci + 1));  // for group banding
+            ListView_SetItemText(queue_, row, 1, const_cast<LPWSTR>(folder.c_str()));
+            ListView_SetItemText(queue_, row, 2, const_cast<LPWSTR>(drive.c_str()));
+            ListView_SetItemText(queue_, row, 3, const_cast<LPWSTR>(group.c_str()));
+            ListView_SetItemText(queue_, row, 4, const_cast<LPWSTR>(size.c_str()));
+            ListView_SetItemText(queue_, row, 5, const_cast<LPWSTR>(modified.c_str()));
+            ++row;
         }
     }
-    TreeView_Expand(queue_, TVI_ROOT, TVE_EXPAND);
+    return groupsShown;
 }
 
 void App::OnDelete() {
@@ -382,18 +644,19 @@ void App::OnDelete() {
         return;
     }
 
-    // Collect the checked member (child) nodes.
+    // Collect the checked rows. With LVS_EX_CHECKBOXES the checkbox state is
+    // the row's state image: 1 = unchecked, 2 = checked.
     std::vector<bool> selected(entries_.size(), false);
-    for (HTREEITEM it = TreeView_GetRoot(queue_); it; it = TreeView_GetNextSibling(queue_, it)) {
-        for (HTREEITEM child = TreeView_GetChild(queue_, it); child;
-             child = TreeView_GetNextSibling(queue_, child)) {
-            TVITEMW ti{};
-            ti.hItem = child;
-            ti.mask = TVIS_STATEIMAGEMASK | TVIF_PARAM;
-            if (TreeView_GetItem(queue_, &ti) && (ti.state & TVIS_CHECKED)) {
-                const std::size_t idx = static_cast<std::size_t>(ti.lParam);
-                if (idx < selected.size()) selected[idx] = true;
-            }
+    const int count = ListView_GetItemCount(queue_);
+    for (int i = 0; i < count; ++i) {
+        LVITEMW item{};
+        item.mask = LVIS_STATEIMAGEMASK | LVIF_PARAM;
+        item.iItem = i;
+        if (!ListView_GetItem(queue_, &item)) continue;
+        const int stateImage = (item.state & LVIS_STATEIMAGEMASK) >> 16;
+        if (stateImage == 2) {  // checked
+            const std::size_t idx = static_cast<std::size_t>(item.lParam);
+            if (idx < selected.size()) selected[idx] = true;
         }
     }
 
@@ -435,48 +698,17 @@ void App::RemoveDeletedItems(const std::vector<std::size_t>& deleted) {
     const std::unordered_set<std::size_t> deleted_set(deleted.begin(), deleted.end());
 
     // Reflect the deletion in the cluster model so later deletions apply the
-    // keep-one rule against the surviving members.
+    // keep-one rule against the surviving members. Cluster indices are left
+    // untouched, so group numbers stay stable until the next scan.
     for (auto& cl : clusters_)
         cl.members.erase(
             std::remove_if(cl.members.begin(), cl.members.end(),
                            [&](std::size_t m) { return deleted_set.count(m) != 0; }),
             cl.members.end());
 
-    std::unordered_set<HTREEITEM> affected_parents;
-    for (const auto idx : deleted) {
-        auto it = member_items_.find(idx);
-        if (it == member_items_.end()) continue;
-        HTREEITEM parent = TreeView_GetParent(queue_, it->second);
-        TreeView_DeleteItem(queue_, it->second);
-        member_items_.erase(it);
-        if (parent) affected_parents.insert(parent);
-    }
-
-    for (HTREEITEM parent : affected_parents) {
-        int count = 0;
-        for (HTREEITEM c = TreeView_GetChild(queue_, parent); c;
-             c = TreeView_GetNextSibling(queue_, c))
-            ++count;
-        if (count == 0) {
-            TreeView_DeleteItem(queue_, parent);
-            continue;
-        }
-        TVITEMW pit{};
-        pit.hItem = parent;
-        pit.mask = TVIF_PARAM;
-        TreeView_GetItem(queue_, &pit);
-        const std::size_t ci = static_cast<std::size_t>(pit.lParam);
-        if (ci < clusters_.size()) {
-            const auto& anchor = entries_[clusters_[ci].anchor];
-            const std::wstring header = to_wide(anchor.name) + L"  (" +
-                                        std::to_wstring(count) + L")";
-            TVITEMW up{};
-            up.hItem = parent;
-            up.mask = TVIF_TEXT;
-            up.pszText = const_cast<LPWSTR>(header.c_str());
-            TreeView_SetItem(queue_, &up);
-        }
-    }
+    // Re-populate the list view: groups that lost all but one member (or all
+    // members) are skipped, and the remaining rows keep their group numbers.
+    PopulateQueue(clusters_);
 }
 
 }  // namespace gui

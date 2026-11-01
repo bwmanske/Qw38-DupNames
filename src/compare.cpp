@@ -67,6 +67,13 @@ double year_score(int year_a, int year_b) {
 
 PairScore score_pair(const NormalizedName& a, const NormalizedName& b, const Config& cfg) {
     PairScore ps;
+    // A name with no significant tokens (all junk, or year-only) is unmatchable
+    // (SPEC §14): it is skipped from matching rather than treated as identical
+    // to every other empty name.
+    if (a.tokens.empty() || b.tokens.empty()) {
+        ps.class_ = MatchClass::NoMatch;
+        return ps;
+    }
     ps.year_score = year_score(a.year, b.year);
     ps.token_score = token_score(a, b);
     ps.score = cfg.w_year * ps.year_score + cfg.w_tokens * ps.token_score;

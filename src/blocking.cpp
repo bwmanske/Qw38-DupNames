@@ -29,9 +29,14 @@ std::vector<std::pair<std::size_t, std::size_t>> candidate_pairs(
         return nm.tokens.empty() ? std::string() : nm.tokens.front();
     };
 
-    // Bucket files by first significant token (exact).
+    // Bucket files by first significant token (exact). Names with no tokens are
+    // unmatchable (SPEC §14) and are skipped from blocking entirely.
     std::map<std::string, std::vector<std::size_t>> buckets;
-    for (std::size_t i = 0; i < n; ++i) buckets[first_token(names[i])].push_back(i);
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::string ft = first_token(names[i]);
+        if (ft.empty()) continue;
+        buckets[ft].push_back(i);
+    }
 
     // 1. Compare every pair within a bucket.
     for (auto& kv : buckets) {

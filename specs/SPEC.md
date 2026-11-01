@@ -26,12 +26,13 @@ The matcher must tolerate:
 - Normalizing file names into a comparable token form.
 - Extracting and comparing a year component.
 - Scoring name pairs with a weighted similarity score.
-- Grouping names into match clusters and producing a report.
+- Grouping names into match clusters and showing them in a GUI queue.
+- A Win32 GUI: directory list, match queue, duplicate deletion, and INI
+  persistence (window and dialog mockups in §10).
 
 ### Out of scope (v1)
 - Comparing file *contents* (hashing) — names only.
 - Cross-language / translation matching.
-- GUI. CLI + report files only.
 
 ## 3. Inputs
 
@@ -255,56 +256,69 @@ To avoid comparing every pair:
 4. Is the v1 Latin-only folding table acceptable, or is full NFKD
    (ICU backend) required from the start?
 
-## 10. Screen Mockups
+## 10. Window and Dialog Mockups
 
 The v1 product is a Win32 desktop GUI (this supersedes the CLI-only scope in
 §2). There are two custom screens — the **main window** and the **Options
-dialog** — plus the system folder browser invoked by **Add...**. The mockups
+dialog** — plus the system **delete-confirmation** message box and the system
+**folder browser** invoked by **Add...**. Window size, position, and column
+widths persist across runs in the INI `[Window]` section (§10.5). The mockups
 below are not to scale; they show layout and content.
 
 ### 10.1 Main window
 
 ```
-+--------------------------------------------------------------------+
-| DupNames                                                           |
-+--------------------------------------------------------------------+
-| Directories:                                                       |
-| +---------------------------------------------------------------+  |
-| | Path                                                          |  |
-| | D:\Media\Movies                                               |  |
-| | E:\Downloads                                                  |  |
-| | \\fileserver\share\inbox                                      |  |
-| | \\fileserver\archive\protected  [protected]                   |  |
-| +---------------------------------------------------------------+  |
-| [Add...] [Remove]                          [Options...] [Scan]     |
-| Matches:                                                           |
-| +---------------------------------------------------------------+  |
-| | > The Matrix (1999)  (2)                                      |  |
-| |     the.matrix.1999.extended.1080p.x264  -  D:\Media\Movies   |  |
-| |     The Matrix (1999)  -  \\fileserver\share\inbox            |  |
-| | > Inception (2010)  (2)                                       |  |
-| |     inception.2010.1080p.x264  -  E:\Downloads                |  |
-| |     Inception (2010)  -  D:\Media\Movies                      |  |
-| +---------------------------------------------------------------+  |
-| Ready.                                                             |
-+--------------------------------------------------------------------+
++----------------------------------------------------------------------------+
+| DupNames                                                                   |
++----------------------------------------------------------------------------+
+| Directories:                                                               |
+| +------------------------------------------------------------------------+ |
+| | Path                          | Type                                  | |
+| | D:\Media\Movies               | Common                                | |
+| | E:\Downloads                  | Common                                | |
+| | \\fileserver\share\inbox      | Common                                | |
+| | \\fileserver\archive\protected| Protected                             | |
+| +------------------------------------------------------------------------+ |
+| [Add...] [Remove]                        [Options...] [Scan] [Delete]     |
+| Matches:                                                                   |
+| +------------------------------------------------------------------------+ |
+| | [ ] File Name             | Folder           | Drive | Group | Size    | |
+| | [ ] the.matrix.1999.ext.. | D:\Media\Movies  | D:    | 1     | 1.37 GB | |
+| | [x] The Matrix (1999)     | \\fileserver\sh. | \\file | 1     | 1.37 GB | |
+| | [ ] inception.2010.1080p. | E:\Downloads     | E:    | 2     | 78.4 MB | |
+| | [ ] Inception (2010)      | D:\Media\Movies  | D:    | 2     | 78.4 MB | |
+| +------------------------------------------------------------------------+ |
+| Scanned 128 file(s); 2 match group(s)                                      |
++----------------------------------------------------------------------------+
 ```
 
 Elements:
 
-- **Directories** (list): the folders to scan, loaded from `[PathList]` on
-  start and saved on exit. A trailing `[protected]` marks a never-delete
-  path; folders added via **Add...** are common (deletable) paths.
-- **Add...**: opens the system folder browser to append a directory.
+- **Directories** (list view, columns **Path** and **Type**): the folders to
+  scan, loaded from `[PathList]` on start and saved on exit (and immediately
+  on add/remove/type change). **Type** shows `Common` (deletable) or
+  `Protected` (never delete); folders added via **Add...** are Common.
+  **Clicking the Type cell of a row toggles it** between Common and
+  Protected (status: `Type set to <Common|Protected>.`).
+- **Add...**: opens the system folder browser (§10.4) to append a directory.
 - **Remove**: drops the selected directory.
 - **Options...**: opens the Options dialog (§10.2).
-- **Scan**: scans the listed directories and fills the Matches tree; the
+- **Scan**: scans the listed directories and fills the Matches list; the
   status line reports `Scanned N file(s); M match group(s).`
-- **Matches** (tree): one node per MATCH cluster. The top-level node is the
-  cluster's representative name plus a member count; child nodes are the
-  member files, each shown with its directory.
+- **Delete**: deletes the checked files from the Matches list (§10.3).
+- **Matches** (flat list view, one row per cluster member): columns are a
+  **checkbox**, **File Name**, **Folder** (parent directory), **Drive**
+  (`H:` for a drive letter, `\\server\share` for UNC), **Group** (stable
+  1-based cluster number), **Size** (three significant figures, e.g.
+  `1.37 GB`, `78.4 MB`, `512 B`), and **File modified** (locale short date +
+  long time, e.g. `9/9/2026 10:03:26 PM`; `unknown` if unavailable). Clusters
+  with fewer than two members are not shown. **Alternating group shading**:
+  rows of even group numbers are banded pale blue (`RGB(216, 233, 244)`);
+  odd groups are white — the band is per *group*, not per row, so every row
+  of a group shares one color.
 - **Status line**: transient messages (`Ready.`, `Loaded N director(y/ies)
-  from <path>`, `Scanning...`, `Options saved.`, scan results).
+  from <path>`, `Scanning...`, `Options saved.`, scan results, deletion
+  results).
 
 ### 10.2 Options dialog
 
@@ -351,7 +365,77 @@ Elements (each maps to an `[InitState]` key):
   `Exclude` (comma-separated globs).
 - **Junk tokens** — one token per line; stored comma-separated in `Junk`.
 
-Behavior: the dialog is modal. **OK** validates (thresholds/weights in 0–1,
-year lo < hi); an invalid field shows a warning and keeps the dialog open. On
-success the values are applied and saved to the INI immediately. **Cancel**
-(or closing the window) discards changes.
+Behavior: the dialog is modal and centered over the main window. **OK**
+validates (thresholds/weights in 0–1, year lo < hi); an invalid field shows a
+warning and keeps the dialog open. On success the values are applied and saved
+to the INI immediately. **Cancel** (or closing the window) discards changes.
+
+### 10.3 Delete confirmation dialog
+
+A standard message box (`MB_YESNO | MB_ICONWARNING`), title **Delete
+duplicates**, shown when **Delete** is clicked with at least one deletable
+file checked:
+
+```
++--------------------------------------------------------------+
+| Delete duplicates                                        [x] |
++--------------------------------------------------------------+
+|  !  Delete 2 file(s)? They will be moved to the Recycle     |
+|      Bin where possible.                                     |
+|                                                             |
+|      D:\Media\Movies\the.matrix.1999.extended.1080p.x264.mkv|
+|      E:\Downloads\inception.2010.1080p.x264.mkv             |
+|                                                             |
+|      Skipped (protected): 1 file(s).                        |
+|                                                             |
+|                              [Yes] [No]                     |
++--------------------------------------------------------------+
+```
+
+- The body lists every file that will be deleted, one per line; the
+  `Skipped (protected): N file(s).` line appears only when checked files in
+  protected directories were excluded by the keep-one/protected rules.
+- **Yes** deletes: local files go to the Recycle Bin (recoverable), UNC /
+  network files are removed permanently. The status line then reports
+  `Deleted N file(s); kept M (last copy); skipped K protected` (plus any
+  errors).
+- **No** (or closing) cancels; nothing is deleted.
+- If there is nothing to delete, no dialog is shown; the status line says
+  `Nothing to delete. Scan first, then check files to remove.` (no scan yet)
+  or `Nothing to delete (protected files and the last copy of each group are
+  kept).`
+
+### 10.4 Folder browser
+
+**Add...** opens the system folder picker (title **Select a directory to
+scan**): the modern `IFileDialog` in pick-folders mode, falling back to the
+classic `SHBrowseForFolder` dialog when the COM class is not registered. The
+chosen folder is appended to the directory list as a Common path and saved to
+the INI immediately.
+
+### 10.5 Window and layout persistence
+
+The main window's size, position, and column widths persist in the INI
+`[Window]` section, written on exit (and on add/remove/type changes) and read
+on startup:
+
+| Key | Meaning |
+|---|---|
+| `X`, `Y` | Top-left of the window's *normal* (restored) position. |
+| `W`, `H` | Normal size in pixels. |
+| `Maximized` | `true`/`false` — reopen maximized if the window was closed while maximized. |
+| `DirCol0`, `DirCol1` | Directory-list column widths (Path, Type). |
+| `QueueCol0` … `QueueCol5` | Matches-list column widths (File Name, Folder, Drive, Group, Size, File modified). |
+
+Restore rules:
+
+- The window rect is restored only if all four of `X`/`Y`/`W`/`H` are present,
+  the size is at least 320×200, and the rect overlaps the virtual screen
+  (all monitors) by at least 100×100 px — otherwise the default 900×640 at
+  the system default position is used (guards against a saved position on a
+  now-disconnected monitor).
+- A column-width key is applied only if present and ≥ 20 px; otherwise the
+  built-in default width is used.
+- The *normal* position is saved (via `GetWindowPlacement`), never the
+  maximized one, so a maximized window reopens at its remembered normal
+  rect, then maximizes if `Maximized` is true.

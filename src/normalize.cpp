@@ -151,6 +151,12 @@ NormalizedName normalize(const std::string& raw_name, const Config& cfg) {
         }
     }
     result.tokens = std::move(kept);
+
+    // Cap the token list used for scoring (SPEC §14: very long names). The full
+    // name is preserved in `raw` for display/reports.
+    constexpr std::size_t kMaxScoreTokens = 32;
+    if (result.tokens.size() > kMaxScoreTokens)
+        result.tokens.resize(kMaxScoreTokens);
     return result;
 }
 

@@ -53,6 +53,11 @@ add_executable(DupNames WIN32
   src/gui/options.cpp
 )
 target_link_libraries(DupNames PRIVATE dn_core comctl32 gdiplus shell32 ole32)
+# MinGW/GCC: the app's entry point is wWinMain (wide), so select the wide-char
+# CRT startup. MSVC picks this up automatically from UNICODE + the WIN32 subsystem.
+if(NOT MSVC)
+  target_link_options(DupNames PRIVATE -municode)
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests.
@@ -74,6 +79,9 @@ if(DN_TESTS)
     tests/test_deletion.cpp
     tests/test_ini.cpp
     tests/test_cli.cpp
+    tests/test_determinism.cpp
+    tests/test_perf.cpp
+    tests/test_edge.cpp
   )
   target_link_libraries(dn_tests PRIVATE dn_core doctest)
   if(MSVC)

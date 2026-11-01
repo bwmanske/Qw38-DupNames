@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -200,4 +201,31 @@ TEST_CASE("scan: progress callback fires once per file") {
     const auto entries = scan({DirEntry{td.path, false}}, Config{}, progress);
     CHECK(calls == static_cast<int>(entries.size()));
     CHECK(lastCount == entries.size());
+}
+
+TEST_CASE("scan: lastModified is real-world epoch seconds (FILETIME conversion)") {
+    // Regression: a wrong 1601->1970 tick offset pushed every date ~331 years
+    // into the future (2020s showed as 2340s-2360s).
+    TempDir td("dn_scan_mtime");
+    const auto f = td.path / "dated.mkv";
+    make_file(f);
+
+    // Set the last-write time to a known FILETIME: 2020-06-15 12:34:56 UTC,
+    // which is 1592224496 seconds since the Unix epoch.
+    const std::uint64_t expected_epoch = 1592224496ULL;
+    const std::uint64_t ft100 = expected_epoch * 10000000ULL + 116444736000000000ULL;
+    FILETIME ft{};
+    ft.dwLowDateTime = static_cast<DWORD>(ft100 & 0xFFFFFFFFu);
+    ft.dwHighDateTime = static_cast<DWORD>(ft100 >> 32);
+    HANDLE h = CreateFileW(f.wstring().c_str(), FILE_WRITE_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0,
+                           nullptr);
+    REQUIRE(h != INVALID_HANDLE_VALUE);
+    FILETIME dummy{};
+    CHECK(SetFileTime(h, &dummy, &ft, &ft) != 0);
+    CloseHandle(h);
+
+    const auto entries = scan({DirEntry{td.path, false}}, Config{});
+    REQUIRE(entries.size() == 1);
+    CHECK(entries[0].lastModified == static_cast<std::int64_t>(expected_epoch));
 }

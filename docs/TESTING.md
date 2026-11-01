@@ -9,7 +9,7 @@ specified in `specs/SPEC.md`.
 - **Framework:** [doctest](https://github.com/doctest/doctest) **2.4.11**,
   vendored as a single header at `third_party/doctest.h` (no install step).
 - **Runner:** the `dn_tests` executable, built from `tests/*.cpp`.
-- **Coverage:** 79 test cases (231 assertions), including all 19 acceptance
+- **Coverage:** 107 test cases (346 assertions), including all 19 acceptance
   cases from `specs/SPEC.md`.
 - **Single implementation TU:** `tests/doctest_impl.cpp` defines
   `DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`, which provides `main()`. Every other
@@ -42,8 +42,8 @@ ctest --test-dir build -C Release
 A passing run ends with:
 
 ```
-[doctest] test cases:  79 |  79 passed | 0 failed | 0 skipped
-[doctest] assertions: 231 | 231 passed | 0 failed |
+[doctest] test cases: 107 | 107 passed | 0 failed | 0 skipped
+[doctest] assertions: 346 | 346 passed | 0 failed |
 [doctest] Status: SUCCESS!
 ```
 
@@ -125,10 +125,14 @@ write to a file with `-o` (`--out`):
 | `tests/test_cluster.cpp` | Union-find clustering of MATCH/CLOSE pairs. |
 | `tests/test_blocking.cpp` | Candidate-pair blocking by first token. |
 | `tests/test_acceptance.cpp` | The 19 acceptance cases from `specs/SPEC.md` (section 8). |
-| `tests/test_scanner.cpp` | `dn::scan()`, glob matching, hidden-file skip, progress callback. |
+| `tests/test_scanner.cpp` | `dn::scan()`, glob matching, hidden-file skip, progress callback, FILETIME→epoch conversion. |
 | `tests/test_match.cpp` | The full `dn::match()` pipeline (normalize → block → score → cluster). |
 | `tests/test_ini.cpp` | INI I/O, default path, path-list load/save, `resolve_config` precedence + write-back. |
 | `tests/test_cli.cpp` | `dn::parse_cli()` (`--ini` / `--match` / `--close`). |
+| `tests/test_deletion.cpp` | `dn::plan_deletion()` — keep-one rule, protected skip, mixed/all-protected clusters, empty selection. |
+| `tests/test_determinism.cpp` | NFR-2 — the match pipeline is byte-for-byte reproducible across runs (default + `merge_close`). |
+| `tests/test_perf.cpp` | NFR-1 — 10,000 synthetic names complete in under 60 s (skips the bound under ASan). |
+| `tests/test_edge.cpp` | Edge cases — all-junk/year-only names (no false clusters), invalid UTF-8, 32-token cap, broken symlinks, unreadable directories. |
 
 ## Writing a new test
 

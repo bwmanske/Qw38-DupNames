@@ -3,7 +3,6 @@
 #include <windows.h>
 
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "dn/cli.hpp"
@@ -12,7 +11,8 @@
 namespace gui {
 
 // The DupNames main window: a directory list (loaded from and saved to the INI
-// path list), a Scan action, and a queue (tree view) of MATCH clusters.
+// path list), a Scan action, and a flat list view of MATCH clusters (one row
+// per cluster member, grouped by stable 1-based group number).
 // Thresholds come from the INI [InitState] with command-line overrides.
 class App {
 public:
@@ -29,26 +29,31 @@ private:
     void CreateControls();
     void LoadState();   // resolve config (INI + CLI) and load the path list
     void SaveState();   // persist the current path list to the INI
+    void LoadWindowLayout();  // read [Window] (rect + column widths) from the INI
+    void SaveWindowLayout();  // write [Window] (rect + column widths) to the INI
     void Layout(int w, int h);
     void OnAddFolder();
+    void AddDir(const std::filesystem::path& p);  // add if not already listed
     void OnRemoveFolder();
+    void OnDirTypeToggle(int index);  // click on Type column: Common <-> Protected
     void OnScan();
     void OnOptions();
     void OnDelete();
     void RefreshDirList();
     void SetStatus(const std::wstring& text);
-    void PopulateQueue(const std::vector<dn::Cluster>& clusters);
+    int PopulateQueue(const std::vector<dn::Cluster>& clusters);  // returns # groups shown
     void RemoveDeletedItems(const std::vector<std::size_t>& deleted);
 
     HINSTANCE hInstance_ = nullptr;
     HWND hwnd_ = nullptr;
     HWND dirList_ = nullptr;  // SysListView32: added directories
-    HWND queue_ = nullptr;    // SysTreeView32: match clusters
+    HWND queue_ = nullptr;    // SysListView32: match clusters (flat, one row per member)
     HWND addBtn_ = nullptr;
     HWND removeBtn_ = nullptr;
     HWND scanBtn_ = nullptr;
     HWND optionsBtn_ = nullptr;
     HWND deleteBtn_ = nullptr;
+    HWND matchesLabel_ = nullptr;  // "Matches:" static above the queue
     HWND status_ = nullptr;
 
     dn::CliArgs cli_;                  // parsed command-line options
@@ -57,7 +62,15 @@ private:
     std::vector<dn::DirEntry> dirs_;   // path list (loaded from / saved to INI)
     std::vector<dn::FileEntry> entries_;  // last scan results
     std::vector<dn::Cluster> clusters_;   // last scan's clusters (for deletion)
-    std::unordered_map<std::size_t, HANDLE> member_items_;  // entry index -> tree item
+
+    // [Window] layout persistence (restored in LoadWindowLayout, saved in
+    // SaveWindowLayout). Column widths default to the CreateControls values.
+    RECT window_rect_{};               // restored window rect (if valid)
+    bool have_window_rect_ = false;
+    bool restore_maximized_ = false;
+    int dir_col_widths_[2] = {600, 100};
+    int queue_col_widths_[6] = {280, 290, 55, 50, 70, 130};
+    std::vector<int> row_group_;       // 1-based group number per queue row (banding)
 };
 
 }  // namespace gui

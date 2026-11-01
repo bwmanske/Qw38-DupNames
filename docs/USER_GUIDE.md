@@ -7,9 +7,9 @@ DupNames is a Win32 desktop app that scans local and network directories for
 similar file names (fuzzy matching), shows a queue of matched groups, and can
 delete duplicates from "common" (non-protected) directories.
 
-> **Status: work in progress.** This guide describes the app as it exists
-> today. Most of the product's features are not yet implemented; see
-> [What's implemented](#whats-implemented) for the current state.
+> **Status:** the core product is implemented — scanning, matching, the
+> match queue, duplicate deletion, options, and INI persistence all work.
+> See [What's implemented](#whats-implemented) for the current state.
 
 ---
 
@@ -37,12 +37,17 @@ Artifacts in `build\Release\`:
 
 Run `build\Release\DupNames.exe` (double-click or from a terminal).
 
-The main window (titled **DupNames**, 900 x 640) has three parts:
+The main window (titled **DupNames**, 900 x 640 by default) has three parts.
+Its size, position, and column widths are remembered between runs (see
+[Configuration and user data](#configuration-and-user-data)).
 
-- **Directories** (top): a list of the folders to scan. Use **Add...** to pick
-  a folder (a folder browser opens) and **Remove** to drop the selected one.
-  The list is loaded from the INI `[PathList]` on startup and saved back on
-  exit (see [Configuration and user data](#configuration-and-user-data)).
+- **Directories** (top): a list of the folders to scan, with a **Path** column
+  and a **Type** column (`Common` = deletable, `Protected` = never delete).
+  Use **Add...** to pick a folder (a folder browser opens) and **Remove** to
+  drop the selected one. **Clicking the Type cell of a row toggles it**
+  between Common and Protected. The list is loaded from the INI `[PathList]`
+  on startup and saved back on exit — and immediately on add, remove, or type
+  change (see [Configuration and user data](#configuration-and-user-data)).
   Folders added with **Add...** are saved as common (deletable) paths.
 - **Scan** (top-right): scans the listed directories, finds similar file
   names, and fills the queue below. The status line reports how many files
@@ -54,10 +59,12 @@ The main window (titled **DupNames**, 900 x 640) has three parts:
   [Options dialog](#options-dialog)).
 - **Delete** (top-right): deletes the checked files from the match queue
   (see [Deleting duplicates](#deleting-duplicates)).
-- **Matches** (bottom): a tree of match groups. Each top-level node is a group
-  (the representative name plus a count); expand it to see every file in the
-  group with its directory. Member rows have checkboxes for selecting which
-  files to delete.
+- **Matches** (bottom): a flat list of match groups — one row per file, with
+  a checkbox, **File Name**, **Folder**, **Drive** (`H:` or
+  `\\server\share`), **Group** (the group number), **Size** (e.g. `1.37 GB`),
+  and **File modified** (e.g. `9/9/2026 10:03:26 PM`). Rows of even group
+  numbers are shaded pale blue so groups are easy to tell apart. Check the
+  files you want to delete.
 
 ## Command line
 
@@ -133,6 +140,24 @@ Numbered keys, `1` to `n`:
 Both protected and common paths may reference local drives
 (`D:\Media\Movies`) or network / UNC shares (`\\fileserver\share\inbox`).
 
+### `[Window]` — window and layout
+
+The main window's size, position, and column widths, written on exit (and on
+add/remove/type changes) and read on startup. You normally don't edit these by
+hand; they are listed here for completeness.
+
+| Key | Meaning |
+|---|---|
+| `X`, `Y` | Top-left of the window's normal (restored) position. |
+| `W`, `H` | Normal size in pixels. |
+| `Maximized` | `true`/`false` — reopen maximized if the window was closed while maximized. |
+| `DirCol0`, `DirCol1` | Directory-list column widths (Path, Type). |
+| `QueueCol0` … `QueueCol5` | Matches-list column widths (File Name, Folder, Drive, Group, Size, File modified). |
+
+The window rect is restored only if it is sane (at least 320×200 and at least
+partly on a connected monitor); otherwise the default 900×640 is used. Column
+widths below 20 px are ignored in favor of the built-in defaults.
+
 ### Example INI file
 
 ```ini
@@ -145,6 +170,21 @@ ProtectedPath1 = D:\Media\Movies
 ProtectedPath2 = \\fileserver\archive\protected
 CommonPath1 = E:\Downloads
 CommonPath2 = \\fileserver\share\inbox
+
+[Window]
+X = 100
+Y = 100
+W = 900
+H = 640
+Maximized = false
+DirCol0 = 600
+DirCol1 = 100
+QueueCol0 = 280
+QueueCol1 = 290
+QueueCol2 = 55
+QueueCol3 = 50
+QueueCol4 = 70
+QueueCol5 = 130
 ```
 
 ## Options dialog
@@ -170,16 +210,18 @@ After a scan, the match queue shows each group with its member files. Each
 member row has a checkbox. To delete duplicates:
 
 1. **Scan** the directories.
-2. In the **Matches** tree, expand a group and **check** the files you want
-   deleted (typically the copies in common / non-protected directories).
-3. Click **Delete**. A confirmation dialog shows how many files will be
-   deleted. Click **Yes** to proceed.
+2. In the **Matches** list, **check** the files you want deleted (typically
+   the copies in common / non-protected directories).
+3. Click **Delete**. A confirmation dialog lists every file that will be
+   deleted (and how many protected files were skipped). Click **Yes** to
+   proceed.
 4. Deleted files are removed:
    - **Local paths** → sent to the Recycle Bin (recoverable).
    - **UNC / network paths** → permanently removed (no Recycle Bin over the
      network).
-5. The queue updates: deleted entries are removed from the tree. If a group
-   loses all its deletable members, the remaining (protected) entries stay.
+5. The queue updates: deleted rows are removed from the list. Groups that
+   lose all but one member disappear; the remaining (protected) entries stay.
+   Group numbers stay stable until the next scan.
 
 **Safety rules** (enforced by `plan_deletion` in `dn_core`):
 
@@ -187,7 +229,7 @@ member row has a checkbox. To delete duplicates:
 - At least one file per group is always kept (the "keep-one" rule): if a
   group has a protected member, all common copies may be deleted; if it has
   no protected member, one common copy (the anchor) is kept.
-- Only files that are actually checked in the tree are candidates for
+- Only files that are actually checked in the list are candidates for
   deletion.
 
 ## What's implemented
@@ -196,14 +238,16 @@ member row has a checkbox. To delete duplicates:
 |---|---|
 | Project build (CMake, MSVC) | Done |
 | Name matching core (normalization, Unicode folding, year extraction, junk-token removal, fuzzy scoring, clustering) | Done, in the `dn_core` library, wired into the GUI |
-| Test suite (93 test cases, including all 19 spec acceptance cases) | Done, all passing |
-| Directory scanning | Done (recursive/flat, include/exclude globs, hidden skip) |
-| GUI main window | Done — directory list, Scan button, match queue |
-| Match queue in the GUI | Done — tree of MATCH groups, expandable to member files |
+| Test suite (107 test cases / 346 assertions, including all 19 spec acceptance cases) | Done, all passing |
+| Directory scanning | Done (recursive/flat, include/exclude globs, hidden skip, real-world file dates) |
+| GUI main window | Done — directory list (Path + Type columns), Scan button, match queue |
+| Match queue in the GUI | Done — flat list of MATCH groups (one row per member) with checkboxes, Drive/Group/Size/File-modified columns, and alternating per-group shading |
+| Directory type toggle | Done — click the Type cell to switch a folder between Common and Protected |
 | Command line (`--ini` / `--match` / `--close`) | Done, with INI write-back |
-| Path lists / INI persistence | Done — loaded on start, saved on exit; local + UNC paths |
+| Path lists / INI persistence | Done — loaded on start, saved on exit (and on add/remove/type change); local + UNC paths |
+| Window / column persistence | Done — window size, position, maximized state, and all column widths saved in the INI `[Window]` section |
 | Options dialog | Done — matching/scanning/junk settings, validated, saved to INI on OK |
-| Duplicate deletion | Done — check members in the queue, click Delete; Recycle Bin (local) or permanent remove (UNC) |
+| Duplicate deletion | Done — check members in the queue, click Delete; confirmation dialog lists the files; Recycle Bin (local) or permanent remove (UNC) |
 
 ## How matching will work (preview)
 

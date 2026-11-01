@@ -58,7 +58,8 @@ std::int64_t filetime_to_epoch(const FILETIME& ft) {
     ULARGE_INTEGER uli;
     uli.LowPart = ft.dwLowDateTime;
     uli.HighPart = ft.dwHighDateTime;
-    constexpr std::int64_t kWindowsToUnixTicks = 11824452000000000LL;
+    // 100-ns ticks between 1601-01-01 and 1970-01-01: 11644473600 s * 10^7.
+    constexpr std::int64_t kWindowsToUnixTicks = 116444736000000000LL;
     return (static_cast<std::int64_t>(uli.QuadPart) - kWindowsToUnixTicks) / 10000000LL;
 }
 

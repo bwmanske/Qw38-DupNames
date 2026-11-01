@@ -1,3 +1,6 @@
 build/
+build-*/
 .vs/
 *.user
+temp/
+timefmt_probe.obj
