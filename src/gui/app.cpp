@@ -9,6 +9,7 @@
 #include <commctrl.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cwchar>
 #include <filesystem>
@@ -124,6 +125,12 @@ std::wstring format_epoch(std::int64_t epoch) {
     if (GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, nullptr, time, 64) == 0)
         return L"unknown";
     return std::wstring(date) + L" " + time;
+}
+
+// Format a [0,1] similarity as an integer percentage, e.g. 0.923 -> L"92%".
+std::wstring format_score_pct(double score) {
+    const int pct = static_cast<int>(std::lround(score * 100.0));
+    return std::to_wstring(pct) + L"%";
 }
 
 // Drive label for a path: "H:" for a drive letter, "\\server\share" for UNC.
@@ -294,26 +301,37 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 const bool validRow =
                     row >= 0 && row < static_cast<int>(row_group_.size());
                 if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+                    // CDRF_NOTIFYSUBITEMDRAW is required for CDDS_ITEMPOSTPAINT
+                    // to be delivered at all (it is only sent when this flag is
+                    // returned here); without it the checkbox-covering below
+                    // never runs.
                     if (validRow && row_group_[row] % 2 == 0) {
                         cd->clrTextBk = RGB(216, 233, 244);
-                        return CDRF_NEWFONT;  // apply the new background color
+                        return CDRF_NOTIFYSUBITEMDRAW | CDRF_NEWFONT;
                     }
-                    return CDRF_DODEFAULT;
+                    return CDRF_NOTIFYSUBITEMDRAW | CDRF_DODEFAULT;
                 }
                 if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT) {
-                    if (validRow && row < static_cast<int>(row_protected_.size()) &&
+                    // Sent once per subitem; the checkbox lives in subitem 0.
+                    if (cd->iSubItem == 0 && validRow &&
+                        row < static_cast<int>(row_protected_.size()) &&
                         row_protected_[row]) {
                         const COLORREF bg =
                             (row_group_[row] % 2 == 0) ? RGB(216, 233, 244) : RGB(255, 255, 255);
-                        RECT r{};
-                        ListView_GetItemRect(queue_, row, &r, LVIR_BOUNDS);
-                        // Width of the checkbox cell (the box plus its left
-                        // margin), scaled to the control's DPI. The first
-                        // column's text starts just past this, so painting it
-                        // covers the checkbox without touching the text.
+                        RECT bounds{};
+                        ListView_GetItemRect(queue_, row, &bounds, LVIR_BOUNDS);
+                        // Cover from the row's left edge to where the first
+                        // column's text starts (just past the checkbox).
+                        // LVIR_LABEL gives the text rect; fall back to a
+                        // DPI-scaled checkbox cell width if it is unavailable.
                         const int dpi = GetDeviceCaps(cd->nmcd.hdc, LOGPIXELSX);
                         const int cellW = MulDiv(16, dpi, 96);
-                        RECT cover{r.left, r.top, r.left + cellW, r.bottom};
+                        RECT label{};
+                        const int textLeft =
+                            ListView_GetItemRect(queue_, row, &label, LVIR_LABEL)
+                                ? label.left
+                                : bounds.left + cellW;
+                        RECT cover{bounds.left, bounds.top, textLeft, bounds.bottom};
                         HBRUSH br = CreateSolidBrush(bg);
                         FillRect(cd->nmcd.hdc, &cover, br);
                         DeleteObject(br);
@@ -413,6 +431,7 @@ void App::CreateControls() {
     const struct { const wchar_t* text; int width; } kCols[] = {
         {L"File Name", 280}, {L"Folder", 290}, {L"Drive", 55},
         {L"Group", 50}, {L"Size", 70}, {L"File modified", 130},
+        {L"Score", 60},
     };
     for (int i = 0; i < static_cast<int>(std::size(kCols)); ++i) {
         LVCOLUMNW qcol{};
@@ -475,7 +494,7 @@ void App::LoadWindowLayout() {
             if (cw >= 20) dir_col_widths_[i] = cw;
         }
     }
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 7; ++i) {
         const std::wstring key = L"QueueCol" + std::to_wstring(i);
         if (dn::ini_has_key(ini_path_, L"Window", key)) {
             const int cw = dn::ini_get_int(ini_path_, L"Window", key, 0);
@@ -505,7 +524,7 @@ void App::SaveWindowLayout() {
         if (cw > 0)
             dn::ini_set_int(ini_path_, L"Window", L"DirCol" + std::to_wstring(i), cw);
     }
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 7; ++i) {
         const int cw = ListView_GetColumnWidth(queue_, i);
         if (cw > 0)
             dn::ini_set_int(ini_path_, L"Window", L"QueueCol" + std::to_wstring(i), cw);
@@ -659,7 +678,11 @@ int App::PopulateQueue(const std::vector<dn::Cluster>& clusters) {
         // Group number is the stable 1-based cluster index; it does not change
         // when members are deleted (only a rescan renumbers).
         const std::wstring group = std::to_wstring(ci + 1);
-        for (const auto idx : cl.members) {
+        // Similarity of each member to the group's anchor (Score column);
+        // one score per member, in the same order as cl.members.
+        const std::vector<double> scores = dn::member_scores(entries_, cl, config_);
+        for (std::size_t mi = 0; mi < cl.members.size(); ++mi) {
+            const auto idx = cl.members[mi];
             const auto& e = entries_[idx];
             const std::wstring name = to_wide(e.name);
             const std::wstring folder = to_wide(e.path.parent_path().string());
@@ -667,6 +690,7 @@ int App::PopulateQueue(const std::vector<dn::Cluster>& clusters) {
             const std::wstring drive = drive_of(path);
             const std::wstring size = format_size(e.size);
             const std::wstring modified = format_epoch(e.lastModified);
+            const std::wstring score = format_score_pct(scores[mi]);
 
             LVITEMW item{};
             item.mask = LVIF_TEXT | LVIF_PARAM;
@@ -682,6 +706,7 @@ int App::PopulateQueue(const std::vector<dn::Cluster>& clusters) {
             ListView_SetItemText(queue_, row, 3, const_cast<LPWSTR>(group.c_str()));
             ListView_SetItemText(queue_, row, 4, const_cast<LPWSTR>(size.c_str()));
             ListView_SetItemText(queue_, row, 5, const_cast<LPWSTR>(modified.c_str()));
+            ListView_SetItemText(queue_, row, 6, const_cast<LPWSTR>(score.c_str()));
             ++row;
         }
     }

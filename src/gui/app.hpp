@@ -76,7 +76,7 @@ private:
     bool have_window_rect_ = false;
     bool restore_maximized_ = false;
     int dir_col_widths_[2] = {600, 100};
-    int queue_col_widths_[6] = {280, 290, 55, 50, 70, 130};
+    int queue_col_widths_[7] = {280, 290, 55, 50, 70, 130, 60};
     std::vector<int> row_group_;       // 1-based group number per queue row (banding)
     std::vector<bool> row_protected_;  // true if the row's file is in a protected dir
     int context_row_ = -1;             // queue row targeted by the context menu

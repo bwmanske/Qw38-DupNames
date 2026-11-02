@@ -62,12 +62,15 @@ Its size, position, and column widths are remembered between runs (see
 - **Matches** (bottom): a flat list of match groups — one row per file, with
   a checkbox, **File Name**, **Folder**, **Drive** (`H:` or
   `\\server\share`), **Group** (the group number), **Size** (e.g. `1.37 GB`),
-  and **File modified** (e.g. `9/9/2026 10:03:26 PM`). Rows of even group
-  numbers are shaded pale blue so groups are easy to tell apart. Check the
-  files you want to delete. Files in **protected** directories have **no
-  checkbox** — they can never be selected for deletion. **Right-clicking any
-  row** opens a context menu: **Open File**, **Open Folder in Explorer**, and
-  **Rename** (see [Context menu](#context-menu)).
+  **File modified** (e.g. `9/9/2026 10:03:26 PM`), and **Score** (e.g.
+  `92%`). Rows of even group numbers are shaded pale blue so groups are easy
+  to tell apart. **Score** shows how similar the file is to the group's
+  anchor (the first file in the group, shown as `100%`); it is the same
+  0–1 similarity the matcher uses, as a percentage. Check the files you want
+  to delete. Files in **protected** directories have **no checkbox** — they
+  can never be selected for deletion. **Right-clicking any row** opens a
+  context menu: **Open File**, **Open Folder in Explorer**, and **Rename**
+  (see [Context menu](#context-menu)).
 
 ## Command line
 
@@ -155,7 +158,7 @@ hand; they are listed here for completeness.
 | `W`, `H` | Normal size in pixels. |
 | `Maximized` | `true`/`false` — reopen maximized if the window was closed while maximized. |
 | `DirCol0`, `DirCol1` | Directory-list column widths (Path, Type). |
-| `QueueCol0` … `QueueCol5` | Matches-list column widths (File Name, Folder, Drive, Group, Size, File modified). |
+| `QueueCol0` … `QueueCol6` | Matches-list column widths (File Name, Folder, Drive, Group, Size, File modified, Score). |
 
 The window rect is restored only if it is sane (at least 320×200 and at least
 partly on a connected monitor); otherwise the default 900×640 is used. Column
@@ -188,6 +191,7 @@ QueueCol2 = 55
 QueueCol3 = 50
 QueueCol4 = 70
 QueueCol5 = 130
+QueueCol6 = 60
 ```
 
 ## Options dialog
@@ -258,10 +262,10 @@ entries:
 |---|---|
 | Project build (CMake, MSVC) | Done |
 | Name matching core (normalization, Unicode folding, year extraction, junk-token removal, fuzzy scoring, clustering) | Done, in the `dn_core` library, wired into the GUI |
-| Test suite (107 test cases / 346 assertions, including all 19 spec acceptance cases) | Done, all passing |
+| Test suite (110 test cases / 358 assertions, including all 19 spec acceptance cases) | Done, all passing |
 | Directory scanning | Done (recursive/flat, include/exclude globs, hidden skip, real-world file dates) |
 | GUI main window | Done — directory list (Path + Type columns), Scan button, match queue |
-| Match queue in the GUI | Done — flat list of MATCH groups (one row per member) with checkboxes (none on protected rows), Drive/Group/Size/File-modified columns, and alternating per-group shading |
+| Match queue in the GUI | Done — flat list of MATCH groups (one row per member) with checkboxes (none on protected rows), Drive/Group/Size/File-modified/Score columns, and alternating per-group shading |
 | Matches context menu | Done — right-click any row: Open File (default app), Open Folder in Explorer (file selected), Rename |
 | Rename dialog | Done — modal dialog, base name pre-selected, validated (non-empty, legal characters, no existing target), renames in place |
 | Directory type toggle | Done — click the Type cell to switch a folder between Common and Protected |

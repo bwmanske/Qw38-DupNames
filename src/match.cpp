@@ -29,4 +29,24 @@ std::vector<Cluster> match(const std::vector<FileEntry>& entries, const Config& 
     return cluster(pairs, n, cfg);
 }
 
+std::vector<double> member_scores(const std::vector<FileEntry>& entries,
+                                  const Cluster& cluster, const Config& cfg) {
+    std::vector<double> out;
+    out.reserve(cluster.members.size());
+    if (cluster.members.empty() || cluster.anchor >= entries.size()) return out;
+    const NormalizedName anchor = normalize(entries[cluster.anchor].name, cfg);
+    for (const std::size_t m : cluster.members) {
+        if (m == cluster.anchor) {
+            out.push_back(1.0);  // the anchor is identical to itself
+            continue;
+        }
+        if (m >= entries.size()) {
+            out.push_back(0.0);
+            continue;
+        }
+        out.push_back(score_pair(anchor, normalize(entries[m].name, cfg), cfg).score);
+    }
+    return out;
+}
+
 }  // namespace dn

@@ -312,9 +312,13 @@ Elements:
   **checkbox**, **File Name**, **Folder** (parent directory), **Drive**
   (`H:` for a drive letter, `\\server\share` for UNC), **Group** (stable
   1-based cluster number), **Size** (three significant figures, e.g.
-  `1.37 GB`, `78.4 MB`, `512 B`), and **File modified** (locale short date +
-  long time, e.g. `9/9/2026 10:03:26 PM`; `unknown` if unavailable). Clusters
-  with fewer than two members are not shown. **Alternating group shading**:
+  `1.37 GB`, `78.4 MB`, `512 B`), **File modified** (locale short date +
+  long time, e.g. `9/9/2026 10:03:26 PM`; `unknown` if unavailable), and
+  **Score** (integer percentage, e.g. `92%`). Clusters with fewer than two
+  members are not shown. **Score** is the member's similarity to the group's
+  anchor (the first file in the group, `Cluster::anchor`), computed by
+  `dn::member_scores` (normalize anchor + member, `score_pair`); the anchor
+  row shows `100%`. **Alternating group shading**:
   rows of even group numbers are banded pale blue (`RGB(216, 233, 244)`);
   odd groups are white — the band is per *group*, not per row, so every row
   of a group shares one color. **Protected rows have no checkbox**: files in
@@ -463,7 +467,7 @@ on startup:
 | `W`, `H` | Normal size in pixels. |
 | `Maximized` | `true`/`false` — reopen maximized if the window was closed while maximized. |
 | `DirCol0`, `DirCol1` | Directory-list column widths (Path, Type). |
-| `QueueCol0` … `QueueCol5` | Matches-list column widths (File Name, Folder, Drive, Group, Size, File modified). |
+| `QueueCol0` … `QueueCol6` | Matches-list column widths (File Name, Folder, Drive, Group, Size, File modified, Score). |
 
 Restore rules:
 
