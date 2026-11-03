@@ -67,10 +67,12 @@ Its size, position, and column widths are remembered between runs (see
   to tell apart. **Score** shows how similar the file is to the group's
   anchor (the first file in the group, shown as `100%`); it is the same
   0–1 similarity the matcher uses, as a percentage. Check the files you want
-  to delete. Files in **protected** directories have **no checkbox** — they
-  can never be selected for deletion. **Right-clicking any row** opens a
-  context menu: **Open File**, **Open Folder in Explorer**, and **Rename**
-  (see [Context menu](#context-menu)).
+  to delete. Files in **protected** directories have **no checkbox at all** —
+  they can never be selected for deletion. **Right-clicking a row** opens a
+  context menu that depends on the selection: one selected row gets
+  **Open File**, **Open Folder in Explorer**, and **Rename**; two or more
+  selected rows get **Copy Files to Clipboard** and **Copy CSV data to
+  clipboard** (see [Context menu](#context-menu)).
 
 ## Command line
 
@@ -241,20 +243,33 @@ member row has a checkbox. To delete duplicates:
 
 ## Context menu
 
-Right-click any row in the **Matches** list to open a context menu with three
-entries:
+Right-click a row in the **Matches** list to open a context menu. The menu
+depends on the current selection:
 
-- **Open File** — opens the file with its default application (e.g. a video
-  player for a `.mkv`). If the file cannot be opened, the status line says so.
-- **Open Folder in Explorer** — opens the row's folder (the **Folder** column)
-  in Windows Explorer with the file itself selected, so you can examine it
-  alongside its neighbors.
-- **Rename** — opens a small dialog with the file's current name; the base
-  name (without the extension) is pre-selected so you can just type a new
-  name. The new name must not be empty, must not contain the characters
-  `\ / : * ? " < > |`, and must not already exist in the same folder. On
-  success the file is renamed in place and the row's **File Name** updates.
-  The match results for the renamed file are stale until you scan again.
+- A right-click on a row that is **not** selected first selects just that
+  row (like Windows Explorer), so it gets the single-file menu.
+- **Exactly one row selected** — the single-file menu:
+  - **Open File** — opens the file with its default application (e.g. a video
+    player for a `.mkv`). If the file cannot be opened, the status line says
+    so.
+  - **Open Folder in Explorer** — opens the row's folder (the **Folder**
+    column) in Windows Explorer with the file itself selected, so you can
+    examine it alongside its neighbors.
+  - **Rename** — opens a small dialog with the file's current name; the base
+    name (without the extension) is pre-selected so you can just type a new
+    name. The new name must not be empty, must not contain the characters
+    `\ / : * ? " < > |`, and must not already exist in the same folder. On
+    success the file is renamed in place and the row's **File Name** updates.
+    The match results for the renamed file are stale until you scan again.
+- **Two or more rows selected** — the copy menu:
+  - **Copy Files to Clipboard** — copies the selected files' full paths to
+    the clipboard, one per line. Paste them into Explorer's address bar, a
+    file manager, or any text field.
+  - **Copy CSV data to clipboard** — copies a header row plus one record per
+    selected row with the seven visible columns (File Name, Folder, Drive,
+    Group, Size, File modified, Score). Fields containing commas, quotes, or
+    newlines are quoted per RFC 4180, so the result pastes cleanly into
+    Excel, a spreadsheet, or a CSV file.
 
 ## What's implemented
 
@@ -265,8 +280,8 @@ entries:
 | Test suite (110 test cases / 358 assertions, including all 19 spec acceptance cases) | Done, all passing |
 | Directory scanning | Done (recursive/flat, include/exclude globs, hidden skip, real-world file dates) |
 | GUI main window | Done — directory list (Path + Type columns), Scan button, match queue |
-| Match queue in the GUI | Done — flat list of MATCH groups (one row per member) with checkboxes (none on protected rows), Drive/Group/Size/File-modified/Score columns, and alternating per-group shading |
-| Matches context menu | Done — right-click any row: Open File (default app), Open Folder in Explorer (file selected), Rename |
+| Match queue in the GUI | Done — flat list of MATCH groups (one row per member) with checkboxes (no checkbox at all on protected rows), Drive/Group/Size/File-modified/Score columns, and alternating per-group shading |
+| Matches context menu | Done — selection-dependent: one row → Open File (default app), Open Folder in Explorer (file selected), Rename; multiple rows → Copy Files to Clipboard (full paths), Copy CSV data to clipboard (header + 7 columns, RFC 4180) |
 | Rename dialog | Done — modal dialog, base name pre-selected, validated (non-empty, legal characters, no existing target), renames in place |
 | Directory type toggle | Done — click the Type cell to switch a folder between Common and Protected |
 | Command line (`--ini` / `--match` / `--close`) | Done, with INI write-back |

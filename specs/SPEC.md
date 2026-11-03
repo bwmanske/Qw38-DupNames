@@ -321,14 +321,24 @@ Elements:
   row shows `100%`. **Alternating group shading**:
   rows of even group numbers are banded pale blue (`RGB(216, 233, 244)`);
   odd groups are white — the band is per *group*, not per row, so every row
-  of a group shares one color. **Protected rows have no checkbox**: files in
-  protected directories are painted without a checkbox (the checkbox cell is
-  filled with the row's band color), so they cannot be selected for deletion;
-  `plan_deletion` also skips protected entries as a backstop.
-- **Matches context menu** (right-click any row): **Open File** (opens the
-  file with its default application), **Open Folder in Explorer** (opens the
-  row's folder in Explorer with the file selected), and **Rename** (opens the
-  rename dialog, §10.5).
+  of a group shares one color. **Protected rows have no checkbox**: the
+  queue draws its checkboxes from a custom 3-image state list (blank /
+  unchecked / checked) instead of `LVS_EX_CHECKBOXES`; protected rows get
+  the blank image, so no checkbox is drawn at all and they cannot be
+  selected for deletion. `plan_deletion` also skips protected entries as a
+  backstop. Clicking the checkbox cell of a non-protected row toggles it
+  (the state image is flipped manually; a custom state list has no
+  built-in toggle).
+- **Matches context menu** (right-click a row) — the menu depends on the
+  selection: a right-click on an unselected row first selects just that row
+  (Explorer-like), so it gets the single-file menu. With **exactly one row
+  selected**: **Open File** (opens the file with its default application),
+  **Open Folder in Explorer** (opens the row's folder in Explorer with the
+  file selected), and **Rename** (opens the rename dialog, §10.5). With
+  **two or more rows selected**: **Copy Files to Clipboard** (the selected
+  files' full paths, one per line) and **Copy CSV data to clipboard** (a
+  header row plus one record per selected row with the seven visible
+  columns, RFC 4180 quoting).
 - **Status line**: transient messages (`Ready.`, `Loaded N director(y/ies)
   from <path>`, `Scanning...`, `Options saved.`, scan results, deletion
   results).

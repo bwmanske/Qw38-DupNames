@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <filesystem>
 #include <iterator>
@@ -45,6 +46,16 @@ constexpr INT_PTR kIdStatus = 1006;
 constexpr INT_PTR kIdCtxOpenFile = 2001;
 constexpr INT_PTR kIdCtxOpenFolder = 2002;
 constexpr INT_PTR kIdCtxRename = 2003;
+constexpr INT_PTR kIdCtxCopyFiles = 2004;  // multi-select: copy full paths
+constexpr INT_PTR kIdCtxCopyCsv = 2005;    // multi-select: copy rows as CSV
+
+// Queue checkbox state images (1-based, as stored in LVITEM::state). The
+// queue uses a custom 3-image state list instead of LVS_EX_CHECKBOXES so that
+// protected rows can show no checkbox at all: image 0 is blank, image 1 is
+// unchecked, image 2 is checked.
+constexpr int kStateBlank = 1;
+constexpr int kStateUnchecked = 2;
+constexpr int kStateChecked = 3;
 
 // CLSID_FileOpenDialog (avoids relying on the SDK exporting the CLSID symbol).
 const GUID kClsidFileOpenDialog = {0x43826d1e, 0xe718, 0x42ee,
@@ -193,6 +204,159 @@ int delete_files(const std::vector<std::wstring>& paths, std::wstring& error) {
     return deleted;
 }
 
+// --- Queue checkbox state images ------------------------------------------
+// The Matches queue draws its checkboxes from a custom 3-image state list
+// (blank / unchecked / checked) instead of LVS_EX_CHECKBOXES, so protected
+// rows can show no checkbox at all. The glyphs are drawn with plain GDI onto
+// 32-bit ARGB bitmaps (a white box with a gray border, plus a check mark when
+// checked). Each color image is paired with an explicit 1-bit mask (bit SET
+// where opaque): ImageList_Add does not honor the ARGB alpha channel on its
+// own, so without the mask the "blank" image renders as a dark box instead of
+// being transparent. (The native theme glyph is not used: the BUTTON theme's
+// checkbox part/state IDs are not reliably available across SDKs, and a wrong
+// part ID would silently draw a radio-button glyph.)
+
+// Build a 32-bit ARGB color DIB for a state image: fully transparent if
+// `blank`, else a checkbox glyph (checked or not). GDI does not write the
+// alpha channel, so every drawn pixel is made fully opaque afterwards. The
+// pixel buffer (owned by the DIB) is returned in *outPx for mask derivation.
+HBITMAP build_state_color(HDC ref, int size, bool blank, bool checked, DWORD** outPx) {
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = size;
+    bi.bmiHeader.biHeight = -size;  // top-down
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bmp = CreateDIBSection(ref, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bmp || !bits) {
+        if (bmp) DeleteObject(bmp);
+        *outPx = nullptr;
+        return nullptr;
+    }
+    DWORD* px = static_cast<DWORD*>(bits);
+    *outPx = px;
+    for (int i = 0; i < size * size; ++i) px[i] = 0;  // transparent
+    if (blank) return bmp;
+
+    const int dpi = GetDeviceCaps(ref, LOGPIXELSX);
+    const int cb = MulDiv(13, dpi, 96);  // standard checkbox glyph size
+    const int off = (size - cb) / 2;
+
+    HDC mem = CreateCompatibleDC(ref);
+    const HGDIOBJ oldBmp = SelectObject(mem, bmp);
+    // A white box with a gray border, plus a check mark when checked.
+    const HPEN pen = CreatePen(PS_SOLID, 1, RGB(110, 110, 110));
+    const HBRUSH fill = reinterpret_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
+    const HGDIOBJ oldPen = SelectObject(mem, pen);
+    const HGDIOBJ oldBr = SelectObject(mem, fill);
+    Rectangle(mem, off, off, off + cb, off + cb);
+    if (checked) {
+        const HPEN check = CreatePen(PS_SOLID, 2, RGB(0, 0, 0));
+        const HGDIOBJ oldCheck = SelectObject(mem, check);
+        MoveToEx(mem, off + 3, off + cb / 2, nullptr);
+        LineTo(mem, off + cb / 2 - 1, off + cb - 4);
+        LineTo(mem, off + cb - 3, off + 3);
+        SelectObject(mem, oldCheck);
+        DeleteObject(check);
+    }
+    SelectObject(mem, oldPen);
+    SelectObject(mem, oldBr);
+    DeleteObject(pen);
+    SelectObject(mem, oldBmp);
+    DeleteDC(mem);
+
+    for (int i = 0; i < size * size; ++i)
+        if (px[i] != 0) px[i] |= 0xFF000000;  // drawn pixels are opaque
+    return bmp;
+}
+
+// Build the 1-bit mask DIB for a 32-bit ARGB source: a bit is SET where the
+// pixel is opaque (alpha != 0) and CLEAR where it is transparent. This is the
+// polarity ImageList_Add expects (verified empirically: with it, the blank
+// image renders fully transparent and the checkbox glyph renders correctly;
+// the opposite polarity draws a dark box over the row).
+HBITMAP build_state_mask(HDC ref, const DWORD* src, int size) {
+    const int stride = ((size + 31) / 32) * 4;  // bytes per row, 32-bit aligned
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = size;
+    bi.bmiHeader.biHeight = -size;  // top-down
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 1;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bmp = CreateDIBSection(ref, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bmp || !bits) {
+        if (bmp) DeleteObject(bmp);
+        return nullptr;
+    }
+    BYTE* m = static_cast<BYTE*>(bits);
+    for (int y = 0; y < size; ++y)
+        for (int x = 0; x < size; ++x)
+            if ((src[y * size + x] >> 24) != 0)  // opaque
+                m[y * stride + (x >> 3)] |= static_cast<BYTE>(0x80 >> (x & 7));
+    return bmp;
+}
+
+// Build the queue's state list: image 0 = blank (protected rows),
+// image 1 = unchecked, image 2 = checked. Each 32-bit ARGB color image is
+// paired with a 1-bit mask (bit SET where opaque) so the transparent corners
+// — and the entire blank image — show the row's band color through.
+HIMAGELIST make_checkbox_state_list(HWND hwnd) {
+    HDC ref = GetDC(hwnd);
+    const int size = MulDiv(16, GetDeviceCaps(ref, LOGPIXELSX), 96);
+    HIMAGELIST il = ImageList_Create(size, size, ILC_COLOR32 | ILC_MASK, 3, 0);
+    if (il) {
+        const bool blank[3] = {true, false, false};
+        const bool checked[3] = {false, false, true};
+        for (int i = 0; i < 3; ++i) {
+            DWORD* px = nullptr;
+            HBITMAP color = build_state_color(ref, size, blank[i], checked[i], &px);
+            if (!color) continue;
+            HBITMAP mask = build_state_mask(ref, px, size);
+            ImageList_Add(il, color, mask);
+            if (mask) DeleteObject(mask);
+            DeleteObject(color);
+        }
+    }
+    ReleaseDC(hwnd, ref);
+    return il;
+}
+
+// Put a wide string on the clipboard as CF_UNICODETEXT.
+bool set_clipboard_text(const std::wstring& text) {
+    if (!OpenClipboard(nullptr)) return false;
+    bool ok = false;
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
+    if (mem) {
+        wchar_t* locked = static_cast<wchar_t*>(GlobalLock(mem));
+        if (locked) {
+            memcpy(locked, text.data(), text.size() * sizeof(wchar_t));
+            locked[text.size()] = L'\0';
+            GlobalUnlock(mem);
+            if (SetClipboardData(CF_UNICODETEXT, mem))
+                ok = true;
+            else
+                GlobalFree(mem);  // SetClipboardData takes ownership on success
+        } else {
+            GlobalFree(mem);
+        }
+    }
+    CloseClipboard();
+    return ok;
+}
+
+// Recover the 1-based state-image index from a state DWORD. The index lives
+// in bits 12-15 (LVIS_STATEIMAGEMASK = 0xF000; INDEXTOSTATEIMAGEMASK(i) =
+// (i) << 12), so the read is a >> 12, not the >> 16 some older samples use.
+// (ListView_GetItem does not return the state image in item.state — use
+// ListView_GetItemState.)
+int state_image_index(DWORD state) {
+    return static_cast<int>((state & LVIS_STATEIMAGEMASK) >> 12);
+}
+
 }  // namespace
 
 App::App(HINSTANCE hInstance, const dn::CliArgs& cli)
@@ -277,6 +441,8 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (id == kIdCtxOpenFile) { OnOpenFile(); return 0; }
             if (id == kIdCtxOpenFolder) { OnOpenFolder(); return 0; }
             if (id == kIdCtxRename) { OnRenameFile(); return 0; }
+            if (id == kIdCtxCopyFiles) { OnCopyFilesToClipboard(); return 0; }
+            if (id == kIdCtxCopyCsv) { OnCopyCsvToClipboard(); return 0; }
             if (HIWORD(wp) == BN_CLICKED) {
                 if (id == kIdAdd) OnAddFolder();
                 else if (id == kIdRemove) OnRemoveFolder();
@@ -288,57 +454,44 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_NOTIFY: {
             const NMHDR* nm = reinterpret_cast<const NMHDR*>(lp);
-            // Matches list custom draw: (1) alternating per-group shading —
-            // even group numbers get a pale blue band (matching the reference
-            // UI); (2) hide the checkbox on protected rows by painting the
-            // checkbox cell with the row's background color, so protected files
-            // cannot be selected for deletion.
+            // Matches list custom draw: alternating per-group shading — even
+            // group numbers get a pale blue band (matching the reference UI).
+            // (Protected rows show no checkbox at all: the queue uses a custom
+            // state-image list whose first image is blank, set per row in
+            // PopulateQueue — see make_checkbox_state_list.)
             if (nm->hwndFrom == queue_ && nm->code == NM_CUSTOMDRAW) {
                 NMLVCUSTOMDRAW* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(lp);
                 if (cd->nmcd.dwDrawStage == CDDS_PREPAINT)
                     return CDRF_NOTIFYITEMDRAW;
                 const int row = static_cast<int>(cd->nmcd.dwItemSpec);
-                const bool validRow =
-                    row >= 0 && row < static_cast<int>(row_group_.size());
-                if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-                    // CDRF_NOTIFYSUBITEMDRAW is required for CDDS_ITEMPOSTPAINT
-                    // to be delivered at all (it is only sent when this flag is
-                    // returned here); without it the checkbox-covering below
-                    // never runs.
-                    if (validRow && row_group_[row] % 2 == 0) {
-                        cd->clrTextBk = RGB(216, 233, 244);
-                        return CDRF_NOTIFYSUBITEMDRAW | CDRF_NEWFONT;
-                    }
-                    return CDRF_NOTIFYSUBITEMDRAW | CDRF_DODEFAULT;
-                }
-                if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT) {
-                    // Sent once per subitem; the checkbox lives in subitem 0.
-                    if (cd->iSubItem == 0 && validRow &&
-                        row < static_cast<int>(row_protected_.size()) &&
-                        row_protected_[row]) {
-                        const COLORREF bg =
-                            (row_group_[row] % 2 == 0) ? RGB(216, 233, 244) : RGB(255, 255, 255);
-                        RECT bounds{};
-                        ListView_GetItemRect(queue_, row, &bounds, LVIR_BOUNDS);
-                        // Cover from the row's left edge to where the first
-                        // column's text starts (just past the checkbox).
-                        // LVIR_LABEL gives the text rect; fall back to a
-                        // DPI-scaled checkbox cell width if it is unavailable.
-                        const int dpi = GetDeviceCaps(cd->nmcd.hdc, LOGPIXELSX);
-                        const int cellW = MulDiv(16, dpi, 96);
-                        RECT label{};
-                        const int textLeft =
-                            ListView_GetItemRect(queue_, row, &label, LVIR_LABEL)
-                                ? label.left
-                                : bounds.left + cellW;
-                        RECT cover{bounds.left, bounds.top, textLeft, bounds.bottom};
-                        HBRUSH br = CreateSolidBrush(bg);
-                        FillRect(cd->nmcd.hdc, &cover, br);
-                        DeleteObject(br);
-                    }
-                    return CDRF_DODEFAULT;
+                if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT &&
+                    row >= 0 && row < static_cast<int>(row_group_.size()) &&
+                    row_group_[row] % 2 == 0) {
+                    cd->clrTextBk = RGB(216, 233, 244);
+                    return CDRF_NEWFONT;
                 }
                 return CDRF_DODEFAULT;
+            }
+            // Clicking the checkbox cell of a non-protected row toggles it
+            // (a custom state-image list has no built-in toggle; the state
+            // image is flipped manually). Protected rows (blank image) are
+            // ignored.
+            if (nm->hwndFrom == queue_ && nm->code == NM_CLICK) {
+                const NMLISTVIEW* nmlv = reinterpret_cast<const NMLISTVIEW*>(lp);
+                if (nmlv->iItem >= 0) {
+                    POINT pt{};
+                    GetCursorPos(&pt);
+                    ScreenToClient(queue_, &pt);
+                    RECT bounds{};
+                    if (ListView_GetItemRect(queue_, nmlv->iItem, &bounds, LVIR_BOUNDS)) {
+                        const HDC hdc = GetDC(queue_);
+                        const int cellW = MulDiv(16, GetDeviceCaps(hdc, LOGPIXELSX), 96);
+                        ReleaseDC(queue_, hdc);
+                        if (pt.x >= bounds.left && pt.x < bounds.left + cellW &&
+                            pt.y >= bounds.top && pt.y < bounds.bottom)
+                            ToggleRowCheckbox(nmlv->iItem);
+                    }
+                }
             }
             // Right-click on a matches row: show the context menu.
             if (nm->hwndFrom == queue_ && nm->code == NM_RCLICK)
@@ -427,7 +580,14 @@ void App::CreateControls() {
                               WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS,
                               8, 208, 400, 300, hwnd_, reinterpret_cast<HMENU>(kIdQueue),
                               hInstance_, nullptr);
-    ListView_SetExtendedListViewStyle(queue_, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
+    // Checkboxes come from a custom 3-image state list (not LVS_EX_CHECKBOXES)
+    // so protected rows can show no checkbox at all: image 0 is blank, image
+    // 1 unchecked, image 2 checked. Toggling is handled in NM_CLICK. (State
+    // images need no extended style — just the LVSIL_STATE image list.)
+    ListView_SetExtendedListViewStyle(queue_, LVS_EX_FULLROWSELECT);
+    stateList_ = make_checkbox_state_list(queue_);
+    if (stateList_)
+        ListView_SetImageList(queue_, stateList_, LVSIL_STATE);
     const struct { const wchar_t* text; int width; } kCols[] = {
         {L"File Name", 280}, {L"Folder", 290}, {L"Drive", 55},
         {L"Group", 50}, {L"Size", 70}, {L"File modified", 130},
@@ -693,10 +853,17 @@ int App::PopulateQueue(const std::vector<dn::Cluster>& clusters) {
             const std::wstring score = format_score_pct(scores[mi]);
 
             LVITEMW item{};
-            item.mask = LVIF_TEXT | LVIF_PARAM;
+            item.mask = LVIF_TEXT | LVIF_PARAM | LVIF_STATE;
             item.iItem = row;
             item.pszText = const_cast<LPWSTR>(name.c_str());
             item.lParam = static_cast<LPARAM>(idx);  // entry index
+            // State image (1-based): protected rows get the blank image (no
+            // checkbox); the rest start unchecked. The index is packed into
+            // bits 12-15 via INDEXTOSTATEIMAGEMASK (verified against the
+            // runtime: ListView_InsertItem honors item.state when the mask
+            // has LVIF_STATE and stateMask is set).
+            item.state = INDEXTOSTATEIMAGEMASK(e.protected_ ? kStateBlank : kStateUnchecked);
+            item.stateMask = LVIS_STATEIMAGEMASK;
             if (ListView_InsertItem(queue_, &item) < 0)
                 continue;
             row_group_.push_back(static_cast<int>(ci + 1));  // for group banding
@@ -719,18 +886,16 @@ void App::OnDelete() {
         return;
     }
 
-    // Collect the checked rows. With LVS_EX_CHECKBOXES the checkbox state is
-    // the row's state image: 1 = unchecked, 2 = checked.
+    // Collect the checked rows. The checkbox state is the row's state image
+    // (1-based index into the custom state list): kStateChecked = checked.
+    // Read via ListView_GetItemState (ListView_GetItem does not return the
+    // state image in item.state).
     std::vector<bool> selected(entries_.size(), false);
     const int count = ListView_GetItemCount(queue_);
     for (int i = 0; i < count; ++i) {
-        LVITEMW item{};
-        item.mask = LVIS_STATEIMAGEMASK | LVIF_PARAM;
-        item.iItem = i;
-        if (!ListView_GetItem(queue_, &item)) continue;
-        const int stateImage = (item.state & LVIS_STATEIMAGEMASK) >> 16;
-        if (stateImage == 2) {  // checked
-            const std::size_t idx = static_cast<std::size_t>(item.lParam);
+        if (state_image_index(ListView_GetItemState(queue_, i, LVIS_STATEIMAGEMASK)) ==
+            kStateChecked) {  // checked
+            const std::size_t idx = EntryIndexForRow(i);
             if (idx < selected.size()) selected[idx] = true;
         }
     }
@@ -810,13 +975,32 @@ void App::OnQueueContextMenu() {
     ht.pt = client;
     const int row = ListView_SubItemHitTest(queue_, &ht);
     if (row < 0) return;
-    context_row_ = row;
+
+    // The menu depends on the current selection: exactly one selected row gets
+    // the single-file menu (Open File / Open Folder / Rename); two or more
+    // selected rows get the copy menu (Copy Files / Copy CSV). A right-click
+    // on an unselected row selects just that row, so it gets the single-file
+    // menu.
+    std::vector<int> selected = SelectedRows();
+    if (std::find(selected.begin(), selected.end(), row) == selected.end()) {
+        // Explorer-like: a right-click on an unselected row selects just that
+        // row (clearing any previous selection).
+        ListView_SetItemState(queue_, -1, 0, LVIS_SELECTED);
+        ListView_SetItemState(queue_, row, LVIS_SELECTED, LVIS_SELECTED);
+        selected.assign(1, row);
+    }
+    context_row_ = selected.front();
 
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
-    AppendMenuW(menu, MF_STRING, kIdCtxOpenFile, L"Open File");
-    AppendMenuW(menu, MF_STRING, kIdCtxOpenFolder, L"Open Folder in Explorer");
-    AppendMenuW(menu, MF_STRING, kIdCtxRename, L"Rename");
+    if (selected.size() == 1) {
+        AppendMenuW(menu, MF_STRING, kIdCtxOpenFile, L"Open File");
+        AppendMenuW(menu, MF_STRING, kIdCtxOpenFolder, L"Open Folder in Explorer");
+        AppendMenuW(menu, MF_STRING, kIdCtxRename, L"Rename");
+    } else {
+        AppendMenuW(menu, MF_STRING, kIdCtxCopyFiles, L"Copy Files to Clipboard");
+        AppendMenuW(menu, MF_STRING, kIdCtxCopyCsv, L"Copy CSV data to clipboard");
+    }
     // TPM_RIGHTBUTTON: the menu was opened by a right-click, so it dismisses
     // when the right button is released.
     TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd_, nullptr);
@@ -898,6 +1082,84 @@ void App::OnRenameFile() {
     item.pszText = const_cast<LPWSTR>(new_name.c_str());
     ListView_SetItem(queue_, &item);
     SetStatus(L"Renamed to " + new_name + L".");
+}
+
+std::vector<int> App::SelectedRows() const {
+    std::vector<int> rows;
+    for (int i = ListView_GetNextItem(queue_, -1, LVNI_SELECTED);
+         i >= 0;
+         i = ListView_GetNextItem(queue_, i, LVNI_SELECTED))
+        rows.push_back(i);
+    return rows;
+}
+
+void App::ToggleRowCheckbox(int row) {
+    if (row < 0 || row >= ListView_GetItemCount(queue_)) return;
+    if (row < static_cast<int>(row_protected_.size()) && row_protected_[row])
+        return;  // protected rows have no checkbox
+    const int state = state_image_index(ListView_GetItemState(queue_, row, LVIS_STATEIMAGEMASK));
+    const int newState = (state == kStateChecked) ? kStateUnchecked : kStateChecked;
+    ListView_SetItemState(queue_, row, INDEXTOSTATEIMAGEMASK(newState), LVIS_STATEIMAGEMASK);
+}
+
+void App::OnCopyFilesToClipboard() {
+    const std::vector<int> rows = SelectedRows();
+    if (rows.empty()) return;
+    std::wstring text;
+    int copied = 0;
+    for (const int row : rows) {
+        const std::size_t idx = EntryIndexForRow(row);
+        if (idx >= entries_.size()) continue;
+        text += to_wide(entries_[idx].path.string());
+        text += L"\r\n";
+        ++copied;
+    }
+    if (copied == 0) return;
+    if (set_clipboard_text(text))
+        SetStatus(L"Copied " + std::to_wstring(copied) +
+                  L" file path(s) to the clipboard.");
+    else
+        SetStatus(L"Could not access the clipboard.");
+}
+
+void App::OnCopyCsvToClipboard() {
+    const std::vector<int> rows = SelectedRows();
+    if (rows.empty()) return;
+    // One CSV record per selected row, in selection order, with the same
+    // values as the visible columns (File Name, Folder, Drive, Group, Size,
+    // File modified, Score). Fields containing a comma, quote, or line break
+    // are quoted, with embedded quotes doubled (RFC 4180).
+    auto field = [](const std::wstring& s) {
+        if (s.find_first_of(L",\"\r\n") == std::wstring::npos) return s;
+        std::wstring out = L"\"";
+        for (const wchar_t c : s) {
+            if (c == L'"') out += L"\"\"";
+            out += c;
+        }
+        out += L"\"";
+        return out;
+    };
+    auto cell = [this](int row, int col) {
+        wchar_t buf[1024]{};
+        ListView_GetItemText(queue_, row, col, buf, 1024);
+        return std::wstring(buf);
+    };
+    std::wstring text = L"File Name,Folder,Drive,Group,Size,File modified,Score\r\n";
+    int copied = 0;
+    for (const int row : rows) {
+        std::wstring rec;
+        for (int col = 0; col < 7; ++col) {
+            if (col > 0) rec += L",";
+            rec += field(cell(row, col));
+        }
+        text += rec + L"\r\n";
+        ++copied;
+    }
+    if (copied == 0) return;
+    if (set_clipboard_text(text))
+        SetStatus(L"Copied " + std::to_wstring(copied) + L" row(s) as CSV to the clipboard.");
+    else
+        SetStatus(L"Could not access the clipboard.");
 }
 
 }  // namespace gui

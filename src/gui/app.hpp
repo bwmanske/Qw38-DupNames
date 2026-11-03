@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include <commctrl.h>  // HIMAGELIST (queue checkbox state list)
 
 #include <string>
 #include <vector>
@@ -49,7 +50,11 @@ private:
     void OnOpenFile();          // open the row's file with its default app
     void OnOpenFolder();        // open the row's folder in Explorer (file selected)
     void OnRenameFile();        // rename the row's file (dialog + filesystem rename)
+    void OnCopyFilesToClipboard();  // selected rows' full paths, one per line
+    void OnCopyCsvToClipboard();    // selected rows as CSV (all columns)
     std::size_t EntryIndexForRow(int row) const;  // entry index for a queue row
+    void ToggleRowCheckbox(int row);  // flip a non-protected row's checkbox state
+    std::vector<int> SelectedRows() const;  // currently selected queue rows
 
     HINSTANCE hInstance_ = nullptr;
     HWND hwnd_ = nullptr;
@@ -80,6 +85,7 @@ private:
     std::vector<int> row_group_;       // 1-based group number per queue row (banding)
     std::vector<bool> row_protected_;  // true if the row's file is in a protected dir
     int context_row_ = -1;             // queue row targeted by the context menu
+    HIMAGELIST stateList_ = nullptr;   // queue checkbox state list (blank/unchecked/checked)
 };
 
 }  // namespace gui
