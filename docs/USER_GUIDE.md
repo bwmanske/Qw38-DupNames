@@ -1,6 +1,6 @@
 # DupNames — User Guide
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 **Platform:** Windows only
 
 DupNames is a Win32 desktop app that scans local and network directories for
@@ -220,7 +220,7 @@ dialog) discards them.
 
 - The app image (the embedded 128×128 icon) centered at the top.
 - A **Build Information:** heading (bold), followed by the project version
-  (e.g. `Version 0.1.0`) and the build date and time (e.g.
+  (e.g. `Version 0.2.0`) and the build date and time (e.g.
   `Built Nov 25 2026 14:35:22`), both left-justified in the normal weight.
 - A blank line, then a brief description of what the app does.
 

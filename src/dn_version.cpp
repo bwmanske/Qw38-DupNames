@@ -2,6 +2,6 @@
 
 namespace dn {
 
-std::string version() { return "0.1.0"; }
+std::string version() { return "0.2.0"; }
 
 }  // namespace dn

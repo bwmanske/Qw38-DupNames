@@ -508,7 +508,7 @@ modal window (owner is disabled while it is open) with, top to bottom:
   PNG's alpha channel.
 - A **Build Information:** heading, left-justified and **bold** (the only bold
   text in the window).
-- The project version (e.g. `Version 0.1.0`, from `dn::version()`),
+- The project version (e.g. `Version 0.2.0`, from `dn::version()`),
   left-justified, normal weight.
 - The build date and time (e.g. `Built Nov 25 2026 14:35:22`), left-justified,
   normal weight. The date and time are **not** the `__DATE__`/`__TIME__`
