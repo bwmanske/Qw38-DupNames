@@ -45,6 +45,26 @@ add_library(doctest INTERFACE)
 target_include_directories(doctest INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 # ---------------------------------------------------------------------------
+# Build date/time stamp: generated into the build tree at configure time and
+# refreshed on every build (gen_build_info runs each build), so the About
+# window always shows the date/time the build command was run.
+# ---------------------------------------------------------------------------
+set(DN_BUILD_INFO_DIR ${CMAKE_BINARY_DIR}/generated)
+set(DN_BUILD_INFO_CPP ${DN_BUILD_INFO_DIR}/build_info.cpp)
+set(DN_BUILD_INFO_HPP ${DN_BUILD_INFO_DIR}/build_info.hpp)
+file(MAKE_DIRECTORY ${DN_BUILD_INFO_DIR})
+execute_process(
+  COMMAND ${CMAKE_COMMAND} -DBUILD_INFO_DIR=${DN_BUILD_INFO_DIR}
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateBuildInfo.cmake
+)
+add_custom_target(gen_build_info ALL
+  COMMAND ${CMAKE_COMMAND} -DBUILD_INFO_DIR=${DN_BUILD_INFO_DIR}
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateBuildInfo.cmake
+  COMMENT "Generating build date/time stamp"
+  VERBATIM
+)
+
+# ---------------------------------------------------------------------------
 # DupNames: Win32 GUI application.
 # ---------------------------------------------------------------------------
 add_executable(DupNames WIN32
@@ -52,7 +72,15 @@ add_executable(DupNames WIN32
   src/gui/app.cpp
   src/gui/options.cpp
   src/gui/rename.cpp
+  src/gui/about.cpp
+  ${DN_BUILD_INFO_CPP}
+  src/resources/DupNames.rc
 )
+target_include_directories(DupNames PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/resources
+  ${DN_BUILD_INFO_DIR}
+)
+add_dependencies(DupNames gen_build_info)
 target_link_libraries(DupNames PRIVATE dn_core comctl32 gdiplus shell32 ole32)
 # MinGW/GCC: the app's entry point is wWinMain (wide), so select the wide-char
 # CRT startup. MSVC picks this up automatically from UNICODE + the WIN32 subsystem.

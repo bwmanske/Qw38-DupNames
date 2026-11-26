@@ -7,6 +7,7 @@
 #include <shlobj.h>
 #include <shellapi.h>
 #include <commctrl.h>
+#include <gdiplus.h>
 
 #include <algorithm>
 #include <cmath>
@@ -26,8 +27,11 @@
 #include "dn/match.hpp"
 #include "dn/scanner.hpp"
 
+#include "about.hpp"
 #include "options.hpp"
 #include "rename.hpp"
+
+#include "resources.h"
 
 namespace gui {
 
@@ -37,8 +41,9 @@ constexpr wchar_t kClass[] = L"DNMainWnd";
 constexpr INT_PTR kIdAdd = 1001;
 constexpr INT_PTR kIdRemove = 1002;
 constexpr INT_PTR kIdScan = 1003;
-constexpr INT_PTR kIdOptions = 1007;
+constexpr INT_PTR kIdOptions = 1007;  // menu bar File -> "Options" (was a button)
 constexpr INT_PTR kIdDelete = 1008;
+constexpr INT_PTR kIdMenuAbout = 1009;  // menu bar Help -> About DupNames...
 constexpr INT_PTR kIdDirList = 1004;
 constexpr INT_PTR kIdQueue = 1005;
 constexpr INT_PTR kIdStatus = 1006;
@@ -366,6 +371,11 @@ App::App(HINSTANCE hInstance, const dn::CliArgs& cli)
 int App::Run(int nCmdShow) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
+    // GDI+ (used by the About dialog to draw the embedded PNG, alpha-aware).
+    ULONG_PTR gdiplusToken = 0;
+    Gdiplus::GdiplusStartupInput gdiplusInput;
+    Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr);
+
     INITCOMMONCONTROLSEX icc{};
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_TREEVIEW_CLASSES | ICC_STANDARD_CLASSES;
@@ -377,8 +387,11 @@ int App::Run(int nCmdShow) {
     wc.hInstance = hInstance_;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.hIcon = LoadIconW(hInstance_, MAKEINTRESOURCEW(IDI_APP));
+    wc.hIconSm = LoadIconW(hInstance_, MAKEINTRESOURCEW(IDI_APP));
     wc.lpszClassName = kClass;
     if (!RegisterClassExW(&wc)) {
+        Gdiplus::GdiplusShutdown(gdiplusToken);
         CoUninitialize();
         return 1;
     }
@@ -397,6 +410,7 @@ int App::Run(int nCmdShow) {
         x, y, w, h,
         nullptr, nullptr, hInstance_, this);
     if (!hwnd_) {
+        Gdiplus::GdiplusShutdown(gdiplusToken);
         CoUninitialize();
         return 1;
     }
@@ -416,6 +430,7 @@ int App::Run(int nCmdShow) {
         DispatchMessageW(&msg);
     }
 
+    Gdiplus::GdiplusShutdown(gdiplusToken);
     CoUninitialize();
     return static_cast<int>(msg.wParam);
 }
@@ -443,11 +458,13 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (id == kIdCtxRename) { OnRenameFile(); return 0; }
             if (id == kIdCtxCopyFiles) { OnCopyFilesToClipboard(); return 0; }
             if (id == kIdCtxCopyCsv) { OnCopyCsvToClipboard(); return 0; }
+            // Menu bar commands (notification code 0).
+            if (id == kIdOptions) { OnOptions(); return 0; }
+            if (id == kIdMenuAbout) { OnAbout(); return 0; }
             if (HIWORD(wp) == BN_CLICKED) {
                 if (id == kIdAdd) OnAddFolder();
                 else if (id == kIdRemove) OnRemoveFolder();
                 else if (id == kIdScan) OnScan();
-                else if (id == kIdOptions) OnOptions();
                 else if (id == kIdDelete) OnDelete();
             }
             return 0;
@@ -531,6 +548,17 @@ LRESULT App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 void App::CreateControls() {
+    // Menu bar: "File" -> "Options" (moved here from the button row) and
+    // "Help" -> "About DupNames...".
+    HMENU menuBar = CreateMenu();
+    HMENU fileMenu = CreatePopupMenu();
+    AppendMenuW(fileMenu, MF_STRING, kIdOptions, L"Options");
+    AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"File");
+    HMENU helpMenu = CreatePopupMenu();
+    AppendMenuW(helpMenu, MF_STRING, kIdMenuAbout, L"About DupNames...");
+    AppendMenuW(menuBar, MF_POPUP, reinterpret_cast<UINT_PTR>(helpMenu), L"Help");
+    SetMenu(hwnd_, menuBar);
+
     CreateWindowExW(0, L"STATIC", L"Directories:", WS_CHILD | WS_VISIBLE,
                     8, 8, 200, 16, hwnd_, nullptr, hInstance_, nullptr);
 
@@ -562,9 +590,6 @@ void App::CreateControls() {
     scanBtn_ = CreateWindowExW(0, L"BUTTON", L"Scan", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                                 800, 150, 82, 24, hwnd_, reinterpret_cast<HMENU>(kIdScan),
                                 hInstance_, nullptr);
-    optionsBtn_ = CreateWindowExW(0, L"BUTTON", L"Options...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                   700, 150, 82, 24, hwnd_, reinterpret_cast<HMENU>(kIdOptions),
-                                   hInstance_, nullptr);
     deleteBtn_ = CreateWindowExW(0, L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                                   788, 150, 82, 24, hwnd_, reinterpret_cast<HMENU>(kIdDelete),
                                   hInstance_, nullptr);
@@ -698,6 +723,10 @@ void App::OnOptions() {
     }
 }
 
+void App::OnAbout() {
+    show_about(hwnd_, hInstance_);
+}
+
 void App::Layout(int w, int h) {
     if (w < 100 || h < 100) return;
     const int margin = 8;
@@ -712,7 +741,6 @@ void App::Layout(int w, int h) {
     const int btnY = listTop + listH + 4;  // 166: 4px below the listview
     MoveWindow(addBtn_, margin, btnY, 80, btnH, TRUE);
     MoveWindow(removeBtn_, margin + 86, btnY, 80, btnH, TRUE);
-    MoveWindow(optionsBtn_, w - 270, btnY, 82, btnH, TRUE);
     MoveWindow(scanBtn_, w - 180, btnY, 82, btnH, TRUE);
     MoveWindow(deleteBtn_, w - 90, btnY, 82, btnH, TRUE);
 

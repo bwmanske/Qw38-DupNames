@@ -1,0 +1,8 @@
+#include "resources.h"
+
+// Application icon (title bar, taskbar, Explorer).
+IDI_APP ICON "DeDupNames.ico"
+
+// About-window image, embedded as raw bytes and loaded with GDI+ at runtime
+// (see gui/about.cpp).
+IDR_ABOUT_PNG RCDATA "DeDupNames_128.png"

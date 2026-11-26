@@ -38,7 +38,8 @@ private:
     void OnRemoveFolder();
     void OnDirTypeToggle(int index);  // click on Type column: Common <-> Protected
     void OnScan();
-    void OnOptions();
+    void OnOptions();  // menu bar File -> "Options" (moved here from the button row)
+    void OnAbout();    // menu bar Help -> About DupNames...
     void OnDelete();
     void RefreshDirList();
     void SetStatus(const std::wstring& text);
@@ -63,7 +64,6 @@ private:
     HWND addBtn_ = nullptr;
     HWND removeBtn_ = nullptr;
     HWND scanBtn_ = nullptr;
-    HWND optionsBtn_ = nullptr;
     HWND deleteBtn_ = nullptr;
     HWND matchesLabel_ = nullptr;  // "Matches:" static above the queue
     HWND status_ = nullptr;
